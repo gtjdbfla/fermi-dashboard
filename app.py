@@ -96,14 +96,15 @@ with st.spinner("SEC EDGAR · 시세 불러오는 중..."):
         st.error(f"SEC EDGAR 접속 실패: {error}\n\n"
                  "SEC는 연락처가 담긴 User-Agent를 요구한다. 환경변수 SEC_USER_AGENT를 확인하세요.")
         st.stop()
+    price_frame, price_meta = market.load_price(sec.TICKER)
+    m = fd.compute(facts, price_meta)
+
 if sec.USER_AGENT_IS_PLACEHOLDER:
     st.warning(
         "환경변수 `SEC_USER_AGENT`가 설정되지 않아 자리표시자를 쓰고 있습니다. SEC는 연락 가능한 "
         "이메일이 담긴 User-Agent를 요구하며, 자리표시자로는 곧 차단될 수 있습니다. `.env`를 확인하세요.",
         icon="⚠️",
     )
-    price_frame, price_meta = market.load_price(sec.TICKER)
-    m = fd.compute(facts, price_meta)
 
 profile = sec.company_profile()
 
