@@ -90,11 +90,21 @@ reviewed_through,reviewed_at,verdict,note
 2026-08-14,2026-08-15,변동 없음,8-K는 CEO 고용계약(Item 5.02)으로 계약·용량 수치 변동 없음
 ```
 
-### 주간 자동 점검
+### 갱신 파이프라인
 
-주 1회(월요일 09:00 KST) 클라우드 루틴이 EDGAR 신규 공시를 읽고 무엇이 바뀌는지 보고한다.
-클라우드에서 돌기 때문에 이 서버의 CSV를 직접 고치지는 못하고, 넣을 행을 그대로 제시한다.
-설정은 https://claude.ai/code/routines 에서 바꾼다.
+```
+월요일 09:00 KST  클라우드 루틴 ─▶ EDGAR 판독 ─▶ data/*.csv 커밋 ─▶ GitHub
+                                                                      │
+                              30분마다 서버 크론(deploy.sh)이 git pull ◀┘
+                                          │
+                        CSV만 바뀌었으면 재빌드 없이 즉시 반영
+```
+
+`deploy.sh`는 **코드(.py/Dockerfile/requirements/.streamlit/compose/Caddyfile)가 바뀐 경우에만**
+재빌드한다. CSV만 바뀌면 아무것도 하지 않는다 — `data/`가 볼륨 마운트고 Streamlit 캐시 TTL이
+10분이라 저절로 갱신되며, 매번 재빌드하면 그동안 화면이 끊긴다.
+
+루틴 설정은 https://claude.ai/code/routines 에서 바꾼다.
 
 ### 수동 CSV를 갱신해야 하는 시점
 
