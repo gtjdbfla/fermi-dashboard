@@ -1,0 +1,17 @@
+[server]
+headless = true
+# 컨테이너 밖에서 접속하려면 루프백이 아니라 모든 인터페이스에 바인딩해야 한다.
+address = "0.0.0.0"
+port = 8502
+
+[browser]
+gatherUsageStats = false
+
+# 차트 팔레트를 라이트 서피스(#fcfcfb) 기준으로 검증했기 때문에 테마를 고정한다.
+# 배경을 바꾸면 theme.py의 대비 전제가 깨진다.
+[theme]
+base = "light"
+backgroundColor = "#fcfcfb"
+secondaryBackgroundColor = "#f0efec"
+textColor = "#0b0b0b"
+primaryColor = "#2a78d6"

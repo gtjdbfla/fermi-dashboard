@@ -1,0 +1,37 @@
+services:
+  fermi-dashboard:
+    build: .
+    container_name: fermi-dashboard
+    # 대시보드 자체는 LAN에서만 열어둔다. 외부 공개는 caddy + Tailscale Funnel이 담당한다.
+    # 기존 stock_dashboard가 8501을 쓰므로 8502를 쓴다.
+    ports:
+      - "8502:8502"
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # 수동 관리 CSV(전력 용량·계약·마일스톤·비교기업)를 이미지 재빌드 없이 고칠 수 있게 마운트한다.
+      - ./data:/app/data
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: fermi-caddy
+    restart: unless-stopped
+    # Caddyfile에서 basic_auth를 켤 때 쓸 값을 넘긴다(끄고 쓰면 무시된다).
+    env_file:
+      - .env
+    # 기존 hynix-caddy가 127.0.0.1:8080을 쓰므로 8081로 띄운다.
+    # 127.0.0.1에 묶어 LAN/인터넷에 직접 노출되지 않게 한다.
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - ./logs/caddy:/var/log/caddy
+    depends_on:
+      - fermi-dashboard
+
+volumes:
+  caddy_data:
+  caddy_config:

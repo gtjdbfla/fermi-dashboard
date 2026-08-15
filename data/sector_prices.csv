@@ -1,0 +1,13 @@
+ticker,peak_date,peak,trough,current,from_peak_pct,max_drawdown_pct,company
+LNG,2026-03,283.76,224.86,271.64,-4.3,-20.8,Cheniere Energy
+VG,2025-01,24.0,5.92,13.99,-41.7,-75.3,Venture Global
+NEXT,2025-07,11.36,5.27,7.19,-36.7,-53.6,NextDecade
+NFE,2022-08,60.04,0.32,0.32,-99.5,-99.5,New Fortress Energy
+SMR,2025-07,51.67,7.72,9.39,-81.8,-85.1,NuScale Power
+OKLO,2025-10,163.39,38.83,44.38,-72.8,-76.2,Oklo
+PLUG,2021-01,63.17,0.87,2.32,-96.3,-98.6,Plug Power
+FCEL,2021-01,622.8,4.1,22.37,-96.4,-99.3,FuelCell Energy
+BE,2026-06,328.91,184.89,229.94,-30.1,-43.8,Bloom Energy
+CORZ,2026-06,29.16,20.18,20.18,-30.8,-30.8,Core Scientific
+APLD,2026-05,47.28,25.79,31.2,-34.0,-45.5,Applied Digital
+TLN,2025-09,438.5,302.97,362.74,-17.3,-30.9,Talen Energy

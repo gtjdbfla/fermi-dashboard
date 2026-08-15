@@ -1,0 +1,14 @@
+ticker,company,sub,group,contract_coverage_pct,contract_detail,outcome_basis,what_broke,source
+LNG,Cheniere Energy,LNG 수출,유지,89,2012 FID 전 20년 take-or-pay SPA 4건 16.0 mtpa (명목용량 89%),2016 첫 카고 → 2017 영업CF +$1231M 흑자 전환,,CQP 2012 연차보고서 · SEC XBRL
+VG,Venture Global,LNG 수출,유지,,장기 SPA 기반. 상장 전 계약 확보,매출 $13.8B · 영업CF +$6566M,,SEC XBRL
+BE,Bloom Energy,연료전지,유지,,장비 판매 + 장기 서비스 계약,매출 $2.0B · 2024~25 영업CF 흑자,,SEC XBRL
+TLN,Talen Energy,발전(merchant),유지,,회생 후 데이터센터 장기 PPA로 전환,회생 종료 후 영업CF +$704M,2022년 merchant 노출로 한 차례 챕터11을 겪은 뒤 계약 기반으로 전환,SEC XBRL
+CORZ,Core Scientific,데이터센터 전력,유지,74,12년 take-or-pay 590MW · 계약매출 $10.2B (6개 사이트 약 800MW 기준),회생 후 영업CF +$278M,1기(비트코인)는 계약 없이 현물 노출로 2022 챕터11,CORZ 보도자료 · SEC XBRL
+APLD,Applied Digital,데이터센터 전력,유지,,리스 계약을 소규모 단계별로 선행 확보,매출 0 → $611M,,SEC XBRL
+NEXT,NextDecade,LNG 수출,진행중,92,2023 FID 전 구속력 SPA 16.2 of 17.6 mtpa (92%) · 상대방 9곳,FID 후 3년 경과 · 아직 매출 0,,NextDecade FID 보도자료 · 10-K FY2023
+OKLO,Oklo,원자력,진행중,,구속력 없는 LOI 중심,매출 전무 · 자본만 조달,,SEC XBRL
+SMR,NuScale Power,원자력,진행중,,주력 고객 프로젝트(UAMPS) 2023년 취소,매출 $31M · 영업CF -$460M,첫 상업 프로젝트가 고객 이탈로 취소됨,SEC XBRL
+TELL,Tellurian,LNG 수출,붕괴,0,구속력 있는 장기 SPA 확보 실패,7년 시도 끝 2024년 Woodside에 약 $9억 매각,계약이 없어 차입 자체가 불가 → 주식 발행으로만 연명,Woodside 인수 공시 · Wood Mackenzie
+NFE,New Fortress Energy,LNG→발전,붕괴,,계약은 있었으나 만기·통화가 부채와 불일치,2025 영업CF +$602M → -$583M 역전 · 자기자본 -$554M,계약 기간과 부채 만기 불일치로 재융자 실패,SEC XBRL
+PLUG,Plug Power,수소,붕괴,,장기 오프테이크 없이 장비 판매,매출 $891M까지 성장했으나 17년 연속 영업CF 적자,매출이 늘수록 현금이 더 나감(단위마진 음수),SEC XBRL
+FCEL,FuelCell Energy,연료전지,붕괴,,장기 오프테이크 없이 장비 판매,15년 이상 영업CF 적자 · 액면병합 반복,단위마진 음수,SEC XBRL

@@ -1,0 +1,171 @@
+"""전력·에너지 인프라 섹터 검증.
+
+이 모듈의 존재 이유: 펀더멘탈 항목을 그냥 고르지 않고, **실제로 결과를 갈랐는지 검증한 뒤** 남긴다.
+
+매출보다 먼저 대규모 인프라를 지은 상장사 13곳을 놓고, 결과를 주가가 아니라 객관적 재무 사건으로
+유지/진행중/붕괴로 나눈 다음(주가로 나누면 순환논증이 된다), 항목별 값을 두 그룹에 대조했다.
+그 결과 처음 세웠던 7개 축 중 3개는 판별력이 없었다(data/axis_validation.csv).
+
+살아남은 것은 두 개다.
+  ① 계약 커버리지 — 계약된 수요가 자본 투입에 선행하고, 계약 기간이 부채 만기를 덮는가
+  ② 영업현금흐름 전환 — 가동 후 현금이 실제로 들어오기 시작하는가 (그리고 되돌아가지 않는가)
+"""
+
+from pathlib import Path
+
+import pandas as pd
+import streamlit as st
+
+DATA_DIR = Path(__file__).parent / "data"
+
+GROUP_ORDER = ["유지", "진행중", "붕괴"]
+# T0 판정: 연간 capex가 이 금액을 넘긴 첫 해. 그 수준에 도달하지 못한 회사는
+# 영업 소진이 이 금액을 넘긴 첫 해로 대신한다(자본을 못 넣고 관리비만 태운 경우).
+T0_CAPEX_THRESHOLD = 100e6
+T0_BURN_FALLBACK = 50e6
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_annuals() -> pd.DataFrame:
+    path = DATA_DIR / "sector_annuals.csv"
+    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_prices() -> pd.DataFrame:
+    path = DATA_DIR / "sector_prices.csv"
+    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_profiles() -> pd.DataFrame:
+    path = DATA_DIR / "sector_profiles.csv"
+    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_axis_validation() -> pd.DataFrame:
+    path = DATA_DIR / "axis_validation.csv"
+    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+
+
+def detect_t0(frame: pd.DataFrame) -> int | None:
+    """대규모 자본 투입을 확정한 해. LNG 기업에서는 최종투자결정(FID) 연도와 일치한다."""
+    heavy = frame[frame["capex"].fillna(0) >= T0_CAPEX_THRESHOLD]
+    if not heavy.empty:
+        return int(heavy["fy"].min())
+    burning = frame[frame["op_cf"].fillna(0) <= -T0_BURN_FALLBACK]
+    return int(burning["fy"].min()) if not burning.empty else None
+
+
+def opcf_turn(frame: pd.DataFrame) -> int | None:
+    """영업현금흐름이 흑자로 돌아선 뒤 되돌아가지 않은 첫 해.
+
+    한 해 반짝 흑자는 전환이 아니다. New Fortress는 2021~2024년 흑자였다가 2025년에 -$583M으로
+    되돌아갔고, 그것이 붕괴의 신호였다. 그래서 '이후 연도가 모두 흑자'인 해만 전환으로 본다.
+    """
+    known = frame.dropna(subset=["op_cf"]).sort_values("fy")
+    for index in range(len(known)):
+        rest = known.iloc[index:]
+        if (rest["op_cf"] > 0).all():
+            return int(rest.iloc[0]["fy"])
+    return None
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def summary() -> pd.DataFrame:
+    """기업별 한 줄 요약: 그룹 · T0 · 흑자 전환 연도 · 계약 커버리지 · 주가 결과."""
+    annuals, profiles, prices = load_annuals(), load_profiles(), load_prices()
+    if annuals.empty or profiles.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for ticker, group in annuals.groupby("ticker"):
+        group = group.sort_values("fy")
+        profile = profiles[profiles["ticker"] == ticker]
+        if profile.empty:
+            continue
+        profile = profile.iloc[0]
+        t0 = detect_t0(group)
+        turn = opcf_turn(group)
+        price = prices[prices["ticker"] == ticker]
+        rows.append({
+            "ticker": ticker,
+            "company": profile["company"],
+            "sub": profile["sub"],
+            "group": profile["group"],
+            "coverage": profile.get("contract_coverage_pct"),
+            "t0": t0,
+            "opcf_turn": turn,
+            "years_to_turn": (turn - t0) if (t0 and turn and turn >= t0) else None,
+            "from_peak_pct": float(price.iloc[0]["from_peak_pct"]) if not price.empty else None,
+            "max_drawdown_pct": float(price.iloc[0]["max_drawdown_pct"]) if not price.empty else None,
+            "outcome_basis": profile["outcome_basis"],
+            "what_broke": profile.get("what_broke"),
+        })
+    frame = pd.DataFrame(rows)
+    frame["group"] = pd.Categorical(frame["group"], categories=GROUP_ORDER, ordered=True)
+    return frame.sort_values(["group", "from_peak_pct"], ascending=[True, False]).reset_index(drop=True)
+
+
+def coverage_benchmark() -> dict:
+    """계약 커버리지의 그룹별 관측 범위. 페르미를 놓을 눈금이 된다."""
+    frame = summary()
+    out = {}
+    for name in GROUP_ORDER:
+        values = frame[(frame["group"] == name)]["coverage"].dropna()
+        if not values.empty:
+            out[name] = (float(values.min()), float(values.max()))
+    return out
+
+
+def price_by_group() -> pd.DataFrame:
+    """그룹별 주가 결과 요약. 유지와 붕괴 사이에 구간이 겹치는지 보는 표."""
+    frame = summary().dropna(subset=["from_peak_pct"])
+    if frame.empty:
+        return frame
+    grouped = frame.groupby("group", observed=True)["from_peak_pct"].agg(["count", "mean", "min", "max"])
+    return grouped.round(1).reset_index()
+
+
+def fermi_position(m: dict) -> list[dict]:
+    """검증에서 살아남은 세 지표에 페르미를 놓는다."""
+    contracted = m.get("mw_contracted") or 0
+    landed = m.get("mw_landed") or 0
+    coverage = (contracted / landed * 100) if landed else None
+    benchmark = coverage_benchmark().get("유지")
+
+    items = [{
+        "label": "① 계약이 자본 투입에 선행했는가",
+        "status": "critical",
+        "value": f"반입 설비의 {coverage:.0f}%" if coverage is not None else "산출 불가",
+        "detail": f"$1.2B 투입 후 첫 계약 체결. 유지 그룹 관측 범위는 "
+                  f"{benchmark[0]:.0f}~{benchmark[1]:.0f}%" if benchmark else "",
+        "verdict": "미달 — 투입과 계약의 순서가 반대다",
+    }, {
+        "label": "② 계약 기간이 부채 만기를 덮는가",
+        "status": "good",
+        "value": "리스 15년 vs 사채 2031년(5년)",
+        "detail": "계약이 부채보다 길다. New Fortress를 무너뜨린 불일치는 지금 구조에 없다.",
+        "verdict": "충족",
+    }]
+
+    # 전환까지 걸린 연수는 표본에서 직접 뽑는다. 숫자를 문장에 박아두면 표본을 갱신했을 때
+    # 화면과 근거가 어긋난다.
+    frame = summary()
+    turns = frame.dropna(subset=["years_to_turn"])
+    if not turns.empty:
+        longest = turns.loc[turns["years_to_turn"].idxmax()]
+        detail = (f"유지 그룹에서 가장 오래 걸린 곳은 {longest['company']}로 "
+                  f"{int(longest['years_to_turn'])}년이었다. 붕괴 그룹은 전환에 도달한 곳이 없다. "
+                  "페르미는 T0+1년차라 어느 쪽으로도 판정할 수 없다.")
+    else:
+        detail = "페르미는 T0+1년차라 어느 쪽으로도 판정할 수 없다."
+    items.append({
+        "label": "③ 영업현금흐름 전환",
+        "status": "info",
+        "value": "T0+1년차 · 매출 0",
+        "detail": detail,
+        "verdict": "판정 불가 구간",
+    })
+    return items

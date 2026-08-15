@@ -1,0 +1,30 @@
+# Tailscale Funnel 뒤에 두는 리버스 프록시.
+#  - HTTPS/인증서는 Funnel이 바깥에서 처리하므로, Caddy는 내부에서 평문 HTTP로만 받는다.
+#  - 로그인 없이 접근 가능한 상태다. 비밀번호를 걸려면 reverse_proxy 위에 아래를 추가하고
+#    .env에 DASHBOARD_USER / DASHBOARD_PASSWORD_HASH 를 넣는다:
+#        basic_auth { {$DASHBOARD_USER} {$DASHBOARD_PASSWORD_HASH} }
+#    (해시는 `docker run --rm caddy:2-alpine caddy hash-password --plaintext '비밀번호'`)
+
+:8081 {
+	# Streamlit은 웹소켓으로 화면을 갱신한다. reverse_proxy가 자동으로 처리한다.
+	#
+	# 주소를 그냥 'fermi-dashboard:8502'로 적으면, 재빌드할 때 컨테이너 IP가 바뀌어도 Caddy가
+	# 예전 IP를 계속 물고 있다가 502를 낸다. dynamic a로 매번 DNS를 다시 찾게 해서
+	# 재빌드 후에도 몇 초 안에 새 IP를 잡게 한다. (기존 hynix 스택에서 겪은 문제라 그대로 가져왔다.)
+	reverse_proxy {
+		dynamic a {
+			name fermi-dashboard
+			port 8502
+			refresh 5s
+		}
+	}
+
+	encode gzip
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MiB
+			roll_keep 3
+		}
+	}
+}

@@ -1,0 +1,6 @@
+period,date,instrument,gross_musd,net_musd,dilutive,terms,source
+2025 Q4,2025-10-01,IPO(보통주 신규 상장),745.6,,Y,나스닥 상장 공모,10-K FY2025 (ProceedsFromIssuanceInitialPublicOffering)
+2025,2025-12-31,전환사채,75.5,,Y,상장 전 전환사채,10-K FY2025 (ProceedsFromConvertibleDebt)
+2026 Q1,2026-03-31,장비금융 차입,430.8,,N,PP&E 취득 자금. 담보부 차입,10-Q 2026 Q1 (ProceedsFromIssuanceOfDebt)
+2026 Q2,2026-06-30,장비금융 차입 순증,98.8,,N,총차입금 421.3 -> 520.1백만달러,2026 Q2 8-K
+2026 Q3,2026-07-09,전환사채 5.00% 2031년 만기,431.3,416.8,조건부,전환가 $9.52 / capped call 상한 $14.64(참조가 $7.32의 100% 프리미엄) / capped call 비용 34.5백만달러 / 정기상환·재무유지약정 없음,2026 Q2 8-K

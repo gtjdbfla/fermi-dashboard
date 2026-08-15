@@ -1,0 +1,10 @@
+key,label,period_end,value,unit,source
+cash_total,현금 + 제한현금,2026-06-30,91700000,USD,2026 Q2 8-K
+capex_quarter,분기 PP&E 투자,2026-06-30,185000000,USD,2026 Q2 8-K
+ppe_gross,PP&E 총액(누적),2026-06-30,1550000000,USD,2026 Q2 8-K
+debt_total,총차입금,2026-06-30,520100000,USD,2026 Q2 8-K
+net_loss_quarter,분기 순손실,2026-06-30,-25800000,USD,2026 Q2 8-K
+gna_quarter,분기 판매관리비,2026-06-30,26800000,USD,2026 Q2 8-K
+eps_quarter,주당순손실,2026-06-30,-0.04,USD/주,2026 Q2 8-K
+post_q_financing_net,분기 후 전환사채 순유입,2026-07-09,416800000,USD,2026 Q2 8-K
+post_q_capped_call_cost,분기 후 capped call 비용,2026-07-09,-34500000,USD,2026 Q2 8-K
