@@ -333,6 +333,66 @@ with tabs[2]:
         icon="📉",
     )
 
+    st.markdown("##### 지금의 페르미와 같은 위치였던 해, 그 뒤 주가는")
+    st.caption(
+        f"페르미는 {sc.FERMI_T0}년에 대규모 자본 투입을 시작했고 지금은 **T0+{sc.FERMI_STAGE_OFFSET}년차**다. "
+        "각 기업이 같은 연차에 있던 해를 찾아 그때부터 지금까지의 주가를 쟀다. 보유 기간이 제각각이라 "
+        "총수익률만 보면 오래 보유한 쪽이 유리해 보이므로 **연환산**을 함께 둔다."
+    )
+
+    stage = sc.stage_matched()
+    priced = stage.dropna(subset=["cagr_pct"]).copy()
+    if not priced.empty:
+        priced["라벨"] = priced["company"] + " (" + priced["group"].astype(str) + " · " \
+                        + priced["matched_year"].astype(str) + "년)"
+        st.plotly_chart(
+            bar(priced.sort_values("cagr_pct", ascending=False), "라벨", "cagr_pct", th.SERIES[0],
+                unit="%/년", digits=1, horizontal=True, height=320),
+            use_container_width=True,
+        )
+
+    view = stage.copy()
+    view["그룹"] = view["group"].astype(str)
+    view["그해 매출"] = view["revenue_then"].map(lambda v: fd.usd(v) if pd.notna(v) else "0 / 미상")
+    view["배수"] = view["multiple"].map(lambda v: f"{v:,.2f}배" if pd.notna(v) else "–")
+    for column, source in [("그때 주가", "price_then"), ("현재 주가", "price_now")]:
+        view[column] = view[source].map(lambda v: f"${v:,.2f}" if pd.notna(v) else "–")
+    for column, source in [("총수익률(%)", "total_return_pct"), ("연환산(%)", "cagr_pct")]:
+        view[column] = view[source].map(lambda v: f"{v:+,.1f}" if pd.notna(v) else "–")
+    table(view.rename(columns={"ticker": "티커", "company": "기업", "t0": "T0",
+                               "matched_year": "같은 위치였던 해", "gap_reason": "시세 공백 사유"})
+          [["티커", "기업", "그룹", "T0", "같은 위치였던 해", "그해 매출", "그때 주가", "현재 주가",
+            "배수", "총수익률(%)", "연환산(%)", "시세 공백 사유"]])
+
+    if not priced.empty:
+        st.markdown("**그룹별 연환산 수익률** (%/년)")
+        table(priced.groupby("group", observed=True)["cagr_pct"]
+              .agg(["count", "mean", "min", "max"]).round(1).reset_index()
+              .rename(columns={"group": "그룹", "count": "기업 수", "mean": "평균",
+                               "min": "최악", "max": "최선"}))
+
+    st.warning(
+        "**이 표를 그대로 페르미에 대입하면 안 되는 이유가 셋 있다.** "
+        "① 시세를 구할 수 있는 기업이 그룹당 3곳뿐이다. "
+        "② 유지 그룹의 기준 시점이 2023~2024년인 곳(Bloom·Applied Digital)은 AI 인프라 랠리 구간과 "
+        "겹쳐 펀더멘탈만의 효과가 아니다. 13년에 걸친 Cheniere의 연 14.5%가 순수한 인프라 사이클에 더 가깝다. "
+        "③ **유지 그룹 3곳은 그 시점에 이미 매출이 있었다.** 그때도 매출이 0이었던 곳은 NextDecade와 "
+        "Oklo뿐이고 둘 다 아직 미결이다. 페르미와 진짜로 같은 위치였던 기업들은 아직 답을 내놓지 않았다.",
+        icon="⚠️",
+    )
+    gaps = stage[stage["price_then"].isna()]
+    if not gaps.empty:
+        st.info(
+            "**시세를 구하지 못한 4곳은, 구하지 못한 이유가 곧 결과다.** Tellurian은 상장폐지로 이력이 "
+            "사라졌고, Core Scientific은 챕터11로 기존 주식이 소각·재발행됐다. 표에 -99%로 적히지 "
+            "않았을 뿐 실질은 그보다 나쁘다. 사유는 위 표 마지막 열에 있다.",
+            icon="🚫",
+        )
+        st.caption(
+            "붕괴는 느리게 온다 — New Fortress는 6.7년, FuelCell은 15.7년에 걸쳐 내려갔다. "
+            "지금의 페르미 위치에서 결론이 나기까지는 수년이 걸린다."
+        )
+
     st.markdown("##### 연도별 원본 재무")
     annuals = sc.load_annuals()
     if not annuals.empty:

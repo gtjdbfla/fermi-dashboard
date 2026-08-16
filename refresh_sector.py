@@ -145,8 +145,38 @@ def _price_outcome(ticker: str) -> dict | None:
     }
 
 
-def collect() -> tuple[pd.DataFrame, pd.DataFrame]:
-    annual_records, price_records = [], []
+def _yearly_prices(ticker: str) -> list[dict]:
+    """연도별 마지막 종가. '각 기업이 지금의 페르미와 같은 위치였던 해'의 주가를 찾는 데 쓴다.
+
+    분할 조정된 값이라 수익률 계산에 그대로 쓸 수 있다(FuelCell처럼 액면병합을 반복한 종목도
+    같은 기준으로 비교된다).
+    """
+    try:
+        response = requests.get(
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
+            params={"range": "max", "interval": "1mo"}, headers=YAHOO_HEADERS, timeout=30,
+        )
+        result = response.json()["chart"]["result"][0]
+        frame = pd.DataFrame({
+            "date": pd.to_datetime(result["timestamp"], unit="s"),
+            "close": result["indicators"]["quote"][0]["close"],
+        }).dropna()
+    except Exception as error:
+        print(f"    연도별 시세 실패 {ticker}: {error}")
+        return []
+    if frame.empty:
+        return []
+    frame["year"] = frame["date"].dt.year
+    last = frame.sort_values("date").groupby("year").last().reset_index()
+    return [
+        {"ticker": ticker, "year": int(row["year"]),
+         "close": round(float(row["close"]), 4), "asof": row["date"].strftime("%Y-%m")}
+        for _, row in last.iterrows()
+    ]
+
+
+def collect() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    annual_records, price_records, history_records = [], [], []
     for ticker, (name, cik, sub) in UNIVERSE.items():
         print(f"  {ticker} ({name}) 내려받는 중...")
         facts = _facts(cik)
@@ -161,12 +191,15 @@ def collect() -> tuple[pd.DataFrame, pd.DataFrame]:
         outcome = _price_outcome(ticker)
         if outcome:
             price_records.append({**outcome, "company": name})
-    return pd.DataFrame(annual_records), pd.DataFrame(price_records)
+        history_records.extend(_yearly_prices(ticker))
+    return (pd.DataFrame(annual_records), pd.DataFrame(price_records),
+            pd.DataFrame(history_records))
 
 
 if __name__ == "__main__":
-    annuals, prices = collect()
+    annuals, prices, history = collect()
     DATA.mkdir(parents=True, exist_ok=True)
     annuals.to_csv(DATA / "sector_annuals.csv", index=False, encoding="utf-8")
     prices.to_csv(DATA / "sector_prices.csv", index=False, encoding="utf-8")
-    print(f"\n재무 {len(annuals)}행 · 시세 {len(prices)}행 저장 → {DATA}")
+    history.to_csv(DATA / "sector_price_history.csv", index=False, encoding="utf-8")
+    print(f"\n재무 {len(annuals)}행 · 시세요약 {len(prices)}행 · 연도별시세 {len(history)}행 저장 → {DATA}")

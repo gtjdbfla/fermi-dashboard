@@ -108,6 +108,74 @@ def summary() -> pd.DataFrame:
     return frame.sort_values(["group", "from_peak_pct"], ascending=[True, False]).reset_index(drop=True)
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_price_history() -> pd.DataFrame:
+    path = DATA_DIR / "sector_price_history.csv"
+    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+
+
+# 페르미는 2025년에 대규모 자본 투입을 시작했고 지금은 그 다음 해다. 각 기업의 같은 지점은 T0+1년차.
+FERMI_T0 = 2025
+FERMI_STAGE_OFFSET = 1
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def stage_matched(offset: int = FERMI_STAGE_OFFSET) -> pd.DataFrame:
+    """각 기업이 '지금의 페르미'와 같은 단계에 있던 해를 찾고, 그때부터 지금까지의 주가를 잰다.
+
+    연도를 그대로 비교하면 의미가 없으므로 T0(대규모 자본 투입을 확정한 해)로 정렬한 뒤
+    같은 상대 연차를 고른다. 보유 기간이 제각각이라 총수익률만 보면 오래 보유한 쪽이 유리해
+    보이므로 연환산 수익률을 함께 낸다.
+
+    시세가 없는 해는 억지로 채우지 않는다. 상장폐지·회생·비상장이 이유인데, 그 사실 자체가
+    결과를 말해준다(profiles의 price_gap_reason에 남긴다).
+    """
+    base, profiles, history = summary(), load_profiles(), load_price_history()
+    if base.empty or history.empty:
+        return pd.DataFrame()
+
+    annuals = load_annuals()
+    latest_year = int(history["year"].max())
+    rows = []
+    for _, item in base.iterrows():
+        if pd.isna(item["t0"]):
+            continue
+        ticker, matched_year = item["ticker"], int(item["t0"]) + offset
+        profile = profiles[profiles["ticker"] == ticker]
+        profile = profile.iloc[0] if not profile.empty else {}
+
+        series = history[history["ticker"] == ticker]
+        then_row = series[series["year"] == matched_year]
+        now_row = series[series["year"] == latest_year]
+        then = float(then_row.iloc[0]["close"]) if not then_row.empty else None
+        # 상장폐지된 곳은 마지막 거래가 대신 인수가를 쓴다(프로필에 근거를 적어 둔다).
+        final_price = profile.get("final_price") if hasattr(profile, "get") else None
+        now = float(final_price) if pd.notna(final_price) else (
+            float(now_row.iloc[0]["close"]) if not now_row.empty else None)
+
+        revenue = annuals[(annuals["ticker"] == ticker) & (annuals["fy"] == matched_year)]
+        revenue = float(revenue.iloc[0]["revenue"]) if not revenue.empty and pd.notna(
+            revenue.iloc[0]["revenue"]) else None
+
+        multiple = (now / then) if (then and now) else None
+        years = latest_year - matched_year + 0.6  # 연말 종가 기준이라 반년 남짓을 더한다
+        cagr = ((multiple ** (1 / years) - 1) * 100) if (multiple and multiple > 0 and years > 0) else None
+
+        rows.append({
+            "ticker": ticker, "company": item["company"], "group": str(item["group"]),
+            "t0": int(item["t0"]), "matched_year": matched_year,
+            "revenue_then": revenue,
+            "price_then": then, "price_now": now,
+            "multiple": multiple,
+            "total_return_pct": (multiple - 1) * 100 if multiple else None,
+            "cagr_pct": cagr,
+            "gap_reason": profile.get("price_gap_reason") if hasattr(profile, "get") else None,
+        })
+    frame = pd.DataFrame(rows)
+    frame["group"] = pd.Categorical(frame["group"], categories=GROUP_ORDER, ordered=True)
+    return frame.sort_values(["group", "cagr_pct"], ascending=[True, False]).reset_index(drop=True)
+
+
 def coverage_benchmark() -> dict:
     """계약 커버리지의 그룹별 관측 범위. 페르미를 놓을 눈금이 된다."""
     frame = summary()
