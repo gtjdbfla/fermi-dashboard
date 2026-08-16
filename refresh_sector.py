@@ -134,6 +134,7 @@ def _price_outcome(ticker: str) -> dict | None:
     after_peak = frame.loc[frame["close"].idxmax():]
     trough = after_peak.loc[after_peak["close"].idxmin()]
     current = frame.iloc[-1]
+    first = frame.iloc[0]
     return {
         "ticker": ticker,
         "peak_date": peak["date"].strftime("%Y-%m"),
@@ -142,6 +143,9 @@ def _price_outcome(ticker: str) -> dict | None:
         "current": round(float(current["close"]), 2),
         "from_peak_pct": round((current["close"] / peak["close"] - 1) * 100, 1),
         "max_drawdown_pct": round((trough["close"] / peak["close"] - 1) * 100, 1),
+        # 상장·재상장 첫 관측치. T0+1년차에 아직 상장 전이었던 기업은 이 값으로 대신 잰다.
+        "first_close": round(float(first["close"]), 4),
+        "first_asof": first["date"].strftime("%Y-%m"),
     }
 
 

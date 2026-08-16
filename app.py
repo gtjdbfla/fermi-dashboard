@@ -310,18 +310,26 @@ with tabs[2]:
     st.caption(
         f"페르미는 {sc.FERMI_T0}년에 대규모 자본 투입을 시작했고 지금은 **T0+{sc.FERMI_STAGE_OFFSET}년차**다. "
         "각 기업이 같은 연차에 있던 해를 찾아 그때부터 지금까지의 주가를 쟀다. "
-        "보유 기간이 1.7년에서 15.7년까지 제각각이라 총수익률만 보면 오래 보유한 쪽이 유리해 보이므로 "
-        "**연환산**을 함께 둔다."
+        "보유 기간이 1.6년에서 15.7년까지 제각각이라 총수익률만 보면 오래 보유한 쪽이 유리해 보이므로 "
+        "**연환산**을 함께 둔다.\n\n"
+        "그 해에 아직 상장 전이었거나 회생 중이던 기업은 **상장(재상장) 첫 관측치**부터 쟀다. "
+        "카드마다 어느 기준인지 표시된다."
     )
 
     companies = sc.company_view()
-    priced = companies.dropna(subset=["cagr_pct"]).copy()
+    priced = companies.dropna(subset=["total_return_pct"]).copy()
     if not priced.empty:
-        st.markdown("**전체 순위** (연환산 수익률, %/년)")
-        overview = priced.sort_values("cagr_pct", ascending=False).copy()
-        overview["라벨"] = overview["company"] + " (" + overview["group"].astype(str) + ")"
-        st.plotly_chart(bar(overview, "라벨", "cagr_pct", th.SERIES[0], unit="%/년", digits=1,
-                            horizontal=True, height=300), use_container_width=True)
+        st.markdown("**전체 순위** (총수익률, %)")
+        overview = priced.sort_values("total_return_pct", ascending=False).copy()
+        overview["라벨"] = overview.apply(
+            lambda r: f"{r['company']} ({r['group']}"
+                      + (" · 상장 후" if r["basis"] == "상장/재상장 후" else "") + ")", axis=1)
+        st.plotly_chart(bar(overview, "라벨", "total_return_pct", th.SERIES[0], unit="%", digits=1,
+                            horizontal=True, height=320), use_container_width=True)
+        st.caption(
+            "**'상장 후' 표시가 붙은 곳은 출발점이 다르다.** Talen과 Core Scientific은 파산 직후 "
+            "재상장이라 바닥에서 시작해 수익률이 크게 잡힌다. 같은 잣대로 비교하면 안 된다."
+        )
 
     STATUS_BY_GROUP = {"유지": "good", "진행중": "info", "붕괴": "critical"}
     for rank, row in enumerate(companies.itertuples(), start=1):
@@ -335,7 +343,7 @@ with tabs[2]:
                 ("계약 커버리지", fd.num(row.coverage, 0, "%") if pd.notna(row.coverage) else "미공개",
                  "대규모 자본 투입 시점에 장기계약으로 덮인 용량 비중"),
                 ("총수익률", fd.num(row.total_return_pct, 1, "%") if pd.notna(row.total_return_pct) else "–",
-                 f"{row.matched_year}년 → 현재" if pd.notna(row.matched_year) else ""),
+                 f"{row.basis_asof} → 현재 ({row.basis})" if pd.notna(row.basis_asof) else ""),
                 ("연환산", fd.num(row.cagr_pct, 1, "%/년") if pd.notna(row.cagr_pct) else "–",
                  f"보유 {row.years_held:,.1f}년" if pd.notna(row.years_held) else ""),
                 ("T0→흑자", fd.num(row.years_to_turn, 0, "년") if pd.notna(row.years_to_turn) else "미도달",
@@ -362,6 +370,8 @@ with tabs[2]:
             with table_col:
                 detail = [
                     ("같은 위치였던 해", str(int(row.matched_year)) if pd.notna(row.matched_year) else "–"),
+                    ("수익률 기준", f"{row.basis} ({row.basis_asof} 시작)"
+                     if pd.notna(row.basis_asof) else "산출 불가"),
                     ("그해 매출", fd.usd(row.revenue_then) if pd.notna(row.revenue_then) else "0 / 미상"),
                     ("그때 주가 → 현재",
                      f"${row.price_then:,.2f} → ${row.price_now:,.2f}"
@@ -392,10 +402,18 @@ with tabs[2]:
     )
     if companies["price_then"].isna().any():
         st.info(
-            "**맨 아래 4곳은 시세를 구하지 못했고, 구하지 못한 이유가 곧 결과다.** Tellurian은 "
-            "상장폐지로 이력이 사라졌고, Core Scientific은 챕터11로 기존 주식이 소각·재발행됐다. "
-            "-99%로 적히지 않았을 뿐 실질은 그보다 나쁘다. 각 카드의 '시세 공백 사유'에 적어 뒀다.",
+            "**맨 아래 Tellurian은 시세를 아예 구하지 못했고, 구하지 못한 이유가 곧 결과다.** "
+            "2024년 상장폐지로 이력이 사라졌다. -99%로 적히지 않았을 뿐 실질은 그보다 나쁘다"
+            "(주당 $1.00에 매각). 카드의 '시세 공백 사유'에 적어 뒀다.",
             icon="🚫",
+        )
+    if (companies["basis"] == "상장/재상장 후").any():
+        st.info(
+            "**'상장/재상장 후' 기준 3곳은 다른 곳과 출발점이 다르다.** Talen(2023-05)과 "
+            "Core Scientific(2024-01)은 챕터11을 지나 재상장한 직후가 출발점이라 바닥에서 시작하고, "
+            "Venture Global(2025-01)은 IPO 직후가 출발점이다. T0+1년차 기준인 나머지와 같은 잣대로 "
+            "비교하면 안 된다 — 특히 재상장 두 곳은 '파산 후 회복분'이 수익률에 통째로 들어가 있다.",
+            icon="📐",
         )
         st.caption(
             "붕괴는 느리게 온다 — New Fortress는 6.7년, FuelCell은 15.7년에 걸쳐 내려갔다. "

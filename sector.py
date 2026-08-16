@@ -131,6 +131,7 @@ def stage_matched(offset: int = FERMI_STAGE_OFFSET) -> pd.DataFrame:
     결과를 말해준다(profiles의 price_gap_reason에 남긴다).
     """
     base, profiles, history = summary(), load_profiles(), load_price_history()
+    prices = load_prices()
     if base.empty or history.empty:
         return pd.DataFrame()
 
@@ -152,6 +153,17 @@ def stage_matched(offset: int = FERMI_STAGE_OFFSET) -> pd.DataFrame:
         # 최대 1년 가까이 부풀려져 연환산 수익률이 낮게 나온다.
         then_asof = pd.Period(then_row.iloc[0]["asof"], freq="M") if not then_row.empty else None
         now_asof = pd.Period(now_row.iloc[0]["asof"], freq="M") if not now_row.empty else None
+
+        # T0+1년차에 아직 상장 전이었거나 회생 중이던 기업은 그 해 주가가 없다. 그런 곳은
+        # 상장(또는 재상장) 첫 관측치부터 잰다. 다만 출발점이 다르므로 반드시 표시해야 한다 —
+        # Talen과 Core Scientific은 파산 직후 재상장이라 바닥에서 시작해 수익률이 크게 잡힌다.
+        basis, basis_asof = "T0+1년차", (str(then_asof) if then_asof is not None else None)
+        if then is None:
+            fallback = prices[prices["ticker"] == ticker] if not prices.empty else pd.DataFrame()
+            if not fallback.empty and pd.notna(fallback.iloc[0].get("first_close")):
+                then = float(fallback.iloc[0]["first_close"])
+                then_asof = pd.Period(str(fallback.iloc[0]["first_asof"]), freq="M")
+                basis, basis_asof = "상장/재상장 후", str(then_asof)
         # 상장폐지된 곳은 마지막 거래가 대신 인수가를 쓴다(프로필에 근거를 적어 둔다).
         final_price = profile.get("final_price") if hasattr(profile, "get") else None
         now = float(final_price) if pd.notna(final_price) else (
@@ -171,6 +183,7 @@ def stage_matched(offset: int = FERMI_STAGE_OFFSET) -> pd.DataFrame:
             "t0": int(item["t0"]), "matched_year": matched_year,
             "revenue_then": revenue,
             "price_then": then, "price_now": now,
+            "basis": basis, "basis_asof": basis_asof,
             "multiple": multiple,
             "years_held": round(years, 1) if years else None,
             "total_return_pct": (multiple - 1) * 100 if multiple else None,
@@ -195,8 +208,8 @@ def company_view() -> pd.DataFrame:
         return pd.DataFrame()
 
     frame = base.merge(
-        stage[["ticker", "matched_year", "revenue_then", "price_then", "price_now",
-               "multiple", "years_held", "total_return_pct", "cagr_pct", "gap_reason"]],
+        stage[["ticker", "matched_year", "revenue_then", "price_then", "price_now", "basis",
+               "basis_asof", "multiple", "years_held", "total_return_pct", "cagr_pct", "gap_reason"]],
         on="ticker", how="left")
     if not profiles.empty:
         frame = frame.merge(profiles[["ticker", "contract_detail"]], on="ticker", how="left")
