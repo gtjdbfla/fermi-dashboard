@@ -14,6 +14,7 @@ import streamlit as st
 import fundamentals as fd
 import market
 import market_flow as mflow
+import roadmap as rm
 import sec_edgar as sec
 import sector as sc
 import theme as th
@@ -182,7 +183,7 @@ for column, item in zip(st.columns(3), sc.fermi_position(m)):
         if item["detail"]:
             st.caption(item["detail"])
 
-tabs = st.tabs(["① 계약 커버리지", "② 현금흐름 전환", "③ 섹터 검증", "④ 시장·수급",
+tabs = st.tabs(["① 계약 커버리지", "② 현금흐름 전환", "③ 로드맵", "④ 섹터 검증", "⑤ 시장·수급",
                 "참고 지표", "원본 데이터"])
 
 # ── ① 계약 커버리지 ───────────────────────────────────────────────────────────
@@ -285,8 +286,76 @@ with tabs[1]:
         table(milestones.rename(columns={"date": "일자", "category": "구분", "milestone": "내용",
                                          "status": "상태", "source": "출처"}))
 
-# ── ③ 섹터 검증 ───────────────────────────────────────────────────────────────
+# ── ③ 로드맵 ──────────────────────────────────────────────────────────────────
 with tabs[2]:
+    st.markdown("#### 유지 기업들의 길을 가려면 무엇을 언제까지 해야 하는가")
+
+    steps = rm.evaluate(m)
+    state = rm.progress(steps)
+    if state:
+        metric_row([
+            ("진척", f"{state['done']} / {state['total']} 단계", "달성한 단계 수"),
+            ("현재 단계", f"{state['current_step']}. {state['current']}" if state.get("current") else "완료",
+             "앞 단계를 끝내야 다음 단계로 넘어간다"),
+            ("다음 목표 시점",
+             str(pd.Timestamp(state["next_target"]).date()) if pd.notna(state.get("next_target")) else "미제시",
+             "회사가 공시에 적은 목표"),
+            # days_left 열은 결측이 섞여 float으로 올라온다. 포맷 전에 정수로 되돌린다.
+            ("남은 일수",
+             f"D{int(state['next_days']):+d}" if pd.notna(state.get("next_days")) else "–",
+             "음수면 회사가 공언한 일정을 넘겼다는 뜻"),
+        ])
+        if state["overdue"]:
+            st.error(f"**공언한 일정을 넘긴 단계가 {state['overdue']}개 있다.** 아래에서 확인.", icon="⏰")
+
+    st.caption(
+        "**왜 '유지 기업 평균 소요 시간'이 아닌가.** 그걸 뽑으려고 계산해 봤지만 나오지 않았다. "
+        "T0(대규모 자본 투입 개시) 이전에 이미 매출이 있던 회사가 많아서다 — Cheniere는 재기화 "
+        "터미널 매출 $292M, Bloom Energy는 장비 판매 $972M, Core Scientific은 비트코인 $544M이 "
+        "T0 전부터 있었다. 이들에게 '첫 매출까지 걸린 시간'은 음수가 되고, 평균을 내면 -0.4년 같은 "
+        "값이 나온다. **페르미처럼 완전 무매출로 시작해 사다리를 끝까지 올라간 표본이 사실상 없다.** "
+        "그래서 1차 잣대는 회사가 스스로 공시에 적은 목표 시점으로 두고, 개별 기업 사례는 "
+        "'보통 몇 년 걸리는가'의 감각으로만 옆에 붙인다."
+    )
+
+    STEP_ICON = {rm.STATUS_DONE: "🟢", rm.STATUS_ACTIVE: "🔵", rm.STATUS_WAITING: "⚪"}
+    for row in steps.itertuples():
+        with st.container(border=True):
+            head = f"**{STEP_ICON[row.status]} {row.step}단계 · {row.name}** &nbsp;—&nbsp; {row.status}"
+            if row.overdue:
+                head += " &nbsp;⏰ **일정 초과**"
+            st.markdown(head)
+            st.caption(row.definition)
+
+            left, right = st.columns([0.34, 0.66])
+            with left:
+                target_text = "미제시"
+                if pd.notna(row.target):
+                    target_text = str(pd.Timestamp(row.target).date())
+                    if pd.notna(row.days_left):
+                        target_text += f"  (D{int(row.days_left):+d})"
+                metric_row([("현재", row.display, ""), ("회사 목표", target_text, row.target_source or "")])
+            with right:
+                st.markdown(f"**참고 사례** — {row.peer_reference}")
+                st.caption(row.note)
+
+    st.info(
+        "**이 화면은 매일 다시 계산된다.** 남은 일수는 오늘 날짜 기준이고, 현재 수치는 SEC XBRL과 "
+        "`data/` CSV에서 매번 새로 읽는다. 계약 MW가 늘거나 첫 전력이 켜지면 단계가 자동으로 넘어간다. "
+        "단계 정의와 목표 시점은 `data/roadmap.csv`에 있고, 회사가 새 일정을 공시하면 그 파일만 고치면 된다.",
+        icon="🔄",
+    )
+    st.warning(
+        "**목표 시점은 회사가 제시한 것이지 제3자가 검증한 것이 아니다.** 개발단계 인프라에서 일정 "
+        "지연은 흔하고, 지연 자체가 곧 실패를 뜻하지도 않는다 — Cheniere도 최종투자결정에서 첫 카고까지 "
+        "4년이 걸렸다. 다만 **자기가 공언한 일정을 반복해서 넘기는 것**은 섹터 검증에서 붕괴한 기업들이 "
+        "공통으로 보인 모습이었다.",
+        icon="⚠️",
+    )
+
+
+# ── ④ 섹터 검증 ───────────────────────────────────────────────────────────────
+with tabs[3]:
     st.markdown("#### 이 항목들이 실제로 결과를 갈랐는가")
     st.caption(
         "매출보다 먼저 대규모 인프라를 지은 상장사 13곳. 결과는 주가가 아니라 객관적 재무 사건으로 "
@@ -435,8 +504,8 @@ with tabs[2]:
                                         "자기자본", "장기차입", "주식수(백만)"]])
         st.caption("단위 백만 달러. SEC EDGAR XBRL — `python refresh_sector.py`로 갱신한다.")
 
-# ── ④ 시장·수급 ───────────────────────────────────────────────────────────────
-with tabs[3]:
+# ── ⑤ 시장·수급 ───────────────────────────────────────────────────────────────
+with tabs[4]:
     st.markdown("#### 주가가 왜 움직였는가")
     st.caption(
         "**이 탭은 펀더멘탈이 아니다.** 회사의 건강이 아니라 주가 움직임을 설명하는 층이다. "
@@ -548,7 +617,7 @@ with tabs[3]:
 
 
 # ── 참고 지표 ─────────────────────────────────────────────────────────────────
-with tabs[4]:
+with tabs[5]:
     st.markdown("#### 판정에서 내린 항목들")
     st.caption(
         "섹터 검증에서 생존과 붕괴를 가르지 못한 항목이다. 지우면 맥락을 잃으므로 참고로만 남긴다. "
@@ -638,7 +707,7 @@ with tabs[4]:
                                     use_container_width=True)
 
 # ── 원본 데이터 ───────────────────────────────────────────────────────────────
-with tabs[5]:
+with tabs[6]:
     st.markdown("#### 데이터 출처")
     st.markdown(
         f"""
