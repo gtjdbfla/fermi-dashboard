@@ -294,12 +294,14 @@ with tabs[2]:
     summary = sc.summary()
     view = summary.copy()
     view["그룹"] = view["group"].astype(str)
+    # 고점 대비 수익률은 뺐다. 기업마다 고점 시점이 달라 펀더멘탈이 아니라 '고점이 언제였나'를
+    # 재는 숫자가 된다. 같은 질문은 아래 T0 정렬 비교가 제대로 답한다.
     table(view.rename(columns={
         "ticker": "티커", "company": "기업", "sub": "세부업종", "coverage": "계약 커버리지(%)",
         "t0": "T0", "opcf_turn": "흑자 전환", "years_to_turn": "T0→흑자(년)",
-        "from_peak_pct": "고점대비(%)", "outcome_basis": "결과 근거", "what_broke": "무엇이 무너졌나",
+        "outcome_basis": "결과 근거", "what_broke": "무엇이 무너졌나",
     })[["티커", "기업", "세부업종", "그룹", "계약 커버리지(%)", "T0", "흑자 전환", "T0→흑자(년)",
-        "고점대비(%)", "결과 근거", "무엇이 무너졌나"]])
+        "결과 근거", "무엇이 무너졌나"]])
 
     st.markdown("##### 지금의 페르미와 같은 위치였던 해, 그 뒤 주가는")
     st.caption(
