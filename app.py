@@ -306,50 +306,73 @@ with tabs[2]:
         icon="⚠️",
     )
 
-    st.markdown("##### 표본 13개사")
-    summary = sc.summary()
-    view = summary.copy()
-    view["그룹"] = view["group"].astype(str)
-    # 고점 대비 수익률은 뺐다. 기업마다 고점 시점이 달라 펀더멘탈이 아니라 '고점이 언제였나'를
-    # 재는 숫자가 된다. 같은 질문은 아래 T0 정렬 비교가 제대로 답한다.
-    table(view.rename(columns={
-        "ticker": "티커", "company": "기업", "sub": "세부업종", "coverage": "계약 커버리지(%)",
-        "t0": "T0", "opcf_turn": "흑자 전환", "years_to_turn": "T0→흑자(년)",
-        "outcome_basis": "결과 근거", "what_broke": "무엇이 무너졌나",
-    })[["티커", "기업", "세부업종", "그룹", "계약 커버리지(%)", "T0", "흑자 전환", "T0→흑자(년)",
-        "결과 근거", "무엇이 무너졌나"]])
-
-    st.markdown("##### 지금의 페르미와 같은 위치였던 해, 그 뒤 주가는")
+    st.markdown("##### 기업별 — 주가가 많이 오른 곳부터")
     st.caption(
         f"페르미는 {sc.FERMI_T0}년에 대규모 자본 투입을 시작했고 지금은 **T0+{sc.FERMI_STAGE_OFFSET}년차**다. "
-        "각 기업이 같은 연차에 있던 해를 찾아 그때부터 지금까지의 주가를 쟀다. 보유 기간이 제각각이라 "
-        "총수익률만 보면 오래 보유한 쪽이 유리해 보이므로 **연환산**을 함께 둔다."
+        "각 기업이 같은 연차에 있던 해를 찾아 그때부터 지금까지의 주가를 쟀다. "
+        "보유 기간이 1.7년에서 15.7년까지 제각각이라 총수익률만 보면 오래 보유한 쪽이 유리해 보이므로 "
+        "**연환산**을 함께 둔다."
     )
 
-    stage = sc.stage_matched()
-    priced = stage.dropna(subset=["cagr_pct"]).copy()
+    companies = sc.company_view()
+    priced = companies.dropna(subset=["cagr_pct"]).copy()
     if not priced.empty:
-        priced["라벨"] = priced["company"] + " (" + priced["group"].astype(str) + " · " \
-                        + priced["matched_year"].astype(str) + "년)"
-        st.plotly_chart(
-            bar(priced.sort_values("cagr_pct", ascending=False), "라벨", "cagr_pct", th.SERIES[0],
-                unit="%/년", digits=1, horizontal=True, height=320),
-            use_container_width=True,
-        )
+        st.markdown("**전체 순위** (연환산 수익률, %/년)")
+        overview = priced.sort_values("cagr_pct", ascending=False).copy()
+        overview["라벨"] = overview["company"] + " (" + overview["group"].astype(str) + ")"
+        st.plotly_chart(bar(overview, "라벨", "cagr_pct", th.SERIES[0], unit="%/년", digits=1,
+                            horizontal=True, height=300), use_container_width=True)
 
-    view = stage.copy()
-    view["그룹"] = view["group"].astype(str)
-    view["그해 매출"] = view["revenue_then"].map(lambda v: fd.usd(v) if pd.notna(v) else "0 / 미상")
-    view["배수"] = view["multiple"].map(lambda v: f"{v:,.2f}배" if pd.notna(v) else "–")
-    view["경과"] = view["years_held"].map(lambda v: f"{v:,.1f}년" if pd.notna(v) else "–")
-    for column, source in [("그때 주가", "price_then"), ("현재 주가", "price_now")]:
-        view[column] = view[source].map(lambda v: f"${v:,.2f}" if pd.notna(v) else "–")
-    for column, source in [("총수익률(%)", "total_return_pct"), ("연환산(%)", "cagr_pct")]:
-        view[column] = view[source].map(lambda v: f"{v:+,.1f}" if pd.notna(v) else "–")
-    table(view.rename(columns={"ticker": "티커", "company": "기업", "t0": "T0",
-                               "matched_year": "같은 위치였던 해", "gap_reason": "시세 공백 사유"})
-          [["티커", "기업", "그룹", "T0", "같은 위치였던 해", "그해 매출", "그때 주가", "현재 주가",
-            "배수", "경과", "총수익률(%)", "연환산(%)", "시세 공백 사유"]])
+    STATUS_BY_GROUP = {"유지": "good", "진행중": "info", "붕괴": "critical"}
+    for rank, row in enumerate(companies.itertuples(), start=1):
+        group = str(row.group)
+        with st.container(border=True):
+            st.markdown(
+                f"**{rank}. {row.company} ({row.ticker})** &nbsp; "
+                f"{th.STATUS_ICON[STATUS_BY_GROUP.get(group, 'info')]} {group} &nbsp;·&nbsp; {row.sub}"
+            )
+            metric_row([
+                ("계약 커버리지", fd.num(row.coverage, 0, "%") if pd.notna(row.coverage) else "미공개",
+                 "대규모 자본 투입 시점에 장기계약으로 덮인 용량 비중"),
+                ("총수익률", fd.num(row.total_return_pct, 1, "%") if pd.notna(row.total_return_pct) else "–",
+                 f"{row.matched_year}년 → 현재" if pd.notna(row.matched_year) else ""),
+                ("연환산", fd.num(row.cagr_pct, 1, "%/년") if pd.notna(row.cagr_pct) else "–",
+                 f"보유 {row.years_held:,.1f}년" if pd.notna(row.years_held) else ""),
+                ("T0→흑자", fd.num(row.years_to_turn, 0, "년") if pd.notna(row.years_to_turn) else "미도달",
+                 "대규모 투자 시작에서 영업현금흐름 흑자까지"),
+            ])
+
+            # 계약 커버리지와 연환산 수익률만 같이 그린다. 둘 다 %라 축을 공유할 수 있고,
+            # 이 대시보드의 논지(계약이 결과를 갈랐다)가 기업 하나 안에서 그대로 보인다.
+            # 총수익률은 -99%에서 +1,454%까지라 같이 그리면 나머지가 뭉개진다.
+            factors = []
+            if pd.notna(row.coverage):
+                factors.append({"지표": "계약 커버리지(%)", "값": float(row.coverage)})
+            if pd.notna(row.cagr_pct):
+                factors.append({"지표": "연환산 수익률(%/년)", "값": float(row.cagr_pct)})
+            chart_col, table_col = st.columns([0.42, 0.58])
+            with chart_col:
+                if factors:
+                    st.plotly_chart(
+                        bar(pd.DataFrame(factors), "지표", "값", th.SERIES[0], unit="%", digits=1,
+                            horizontal=True, height=150),
+                        use_container_width=True, key=f"factors_{row.ticker}")
+                else:
+                    st.caption("그릴 수 있는 수치가 없다 — 아래 사유 참고")
+            with table_col:
+                detail = [
+                    ("같은 위치였던 해", str(int(row.matched_year)) if pd.notna(row.matched_year) else "–"),
+                    ("그해 매출", fd.usd(row.revenue_then) if pd.notna(row.revenue_then) else "0 / 미상"),
+                    ("그때 주가 → 현재",
+                     f"${row.price_then:,.2f} → ${row.price_now:,.2f}"
+                     if pd.notna(row.price_then) and pd.notna(row.price_now) else "–"),
+                    ("배수", f"{row.multiple:,.2f}배" if pd.notna(row.multiple) else "–"),
+                    ("계약 내용", row.contract_detail if pd.notna(row.contract_detail) else "–"),
+                    ("결과 근거", row.outcome_basis),
+                    ("무엇이 무너졌나", row.what_broke if pd.notna(row.what_broke) else "–"),
+                    ("시세 공백 사유", row.gap_reason if pd.notna(row.gap_reason) else "–"),
+                ]
+                table(pd.DataFrame(detail, columns=["항목", "내용"]))
 
     if not priced.empty:
         st.markdown("**그룹별 연환산 수익률** (%/년)")
@@ -367,12 +390,11 @@ with tabs[2]:
         "Oklo뿐이고 둘 다 아직 미결이다. 페르미와 진짜로 같은 위치였던 기업들은 아직 답을 내놓지 않았다.",
         icon="⚠️",
     )
-    gaps = stage[stage["price_then"].isna()]
-    if not gaps.empty:
+    if companies["price_then"].isna().any():
         st.info(
-            "**시세를 구하지 못한 4곳은, 구하지 못한 이유가 곧 결과다.** Tellurian은 상장폐지로 이력이 "
-            "사라졌고, Core Scientific은 챕터11로 기존 주식이 소각·재발행됐다. 표에 -99%로 적히지 "
-            "않았을 뿐 실질은 그보다 나쁘다. 사유는 위 표 마지막 열에 있다.",
+            "**맨 아래 4곳은 시세를 구하지 못했고, 구하지 못한 이유가 곧 결과다.** Tellurian은 "
+            "상장폐지로 이력이 사라졌고, Core Scientific은 챕터11로 기존 주식이 소각·재발행됐다. "
+            "-99%로 적히지 않았을 뿐 실질은 그보다 나쁘다. 각 카드의 '시세 공백 사유'에 적어 뒀다.",
             icon="🚫",
         )
         st.caption(

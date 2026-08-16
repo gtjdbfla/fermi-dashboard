@@ -182,6 +182,29 @@ def stage_matched(offset: int = FERMI_STAGE_OFFSET) -> pd.DataFrame:
     return frame.sort_values(["group", "cagr_pct"], ascending=[True, False]).reset_index(drop=True)
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def company_view() -> pd.DataFrame:
+    """기업 하나당 한 행. 지표별로 흩어진 표를 합쳐 기업 단위로 읽게 한다.
+
+    정렬은 총수익률 내림차순이다. 주가가 많이 오른 곳부터 훑으면 '무엇을 한 곳이 올랐나'가
+    바로 보인다. 시세를 구하지 못한 기업은 맨 뒤로 보낸다(상장폐지·회생·비상장이 이유이고,
+    그 사실 자체는 gap_reason에 남아 있다).
+    """
+    base, stage, profiles = summary(), stage_matched(), load_profiles()
+    if base.empty:
+        return pd.DataFrame()
+
+    frame = base.merge(
+        stage[["ticker", "matched_year", "revenue_then", "price_then", "price_now",
+               "multiple", "years_held", "total_return_pct", "cagr_pct", "gap_reason"]],
+        on="ticker", how="left")
+    if not profiles.empty:
+        frame = frame.merge(profiles[["ticker", "contract_detail"]], on="ticker", how="left")
+    frame["has_price"] = frame["total_return_pct"].notna()
+    return frame.sort_values(["has_price", "total_return_pct"],
+                             ascending=[False, False]).reset_index(drop=True)
+
+
 def coverage_benchmark() -> dict:
     """계약 커버리지의 그룹별 관측 범위. 페르미를 놓을 눈금이 된다."""
     frame = summary()
