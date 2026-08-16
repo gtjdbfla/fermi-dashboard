@@ -11,6 +11,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import ai_review
 import fundamentals as fd
 import market
 import market_flow as mflow
@@ -653,6 +654,27 @@ with tabs[5]:
     if articles.empty:
         st.warning("뉴스를 불러오지 못했다. 잠시 후 다시 시도하면 된다.", icon="⚠️")
     else:
+        st.markdown("##### 🤖 AI 정리")
+        with st.spinner("뉴스 분석 중..."):
+            review, review_error, review_key = ai_review.run(articles, chatter, m)
+        if review:
+            with st.container(border=True):
+                st.markdown(review)
+            st.caption(
+                f"모델 {ai_review.MODEL} · 기사 {min(len(articles), ai_review.MAX_ARTICLES)}건 + "
+                f"커뮤니티 {min(len(chatter), ai_review.MAX_POSTS)}건 기준 · 지문 `{review_key}`. "
+                "**새 기사가 뜨면 지문이 바뀌어 자동으로 다시 분석한다.** 뉴스가 그대로면 같은 결과를 "
+                "재사용해 API를 다시 부르지 않는다."
+            )
+            st.warning(
+                "**AI가 정리한 것이지 검증한 것이 아니다.** 기사에 없는 내용을 지어낼 수 있고, "
+                "커뮤니티 글은 애초에 검증되지 않은 개인 의견이다. 대시보드의 어떤 숫자도 이 정리를 "
+                "근거로 바뀌지 않는다 — 계약 MW는 SEC 8-K로만 갱신된다.",
+                icon="🤖",
+            )
+        elif review_error:
+            st.info(f"AI 정리를 만들지 못했다 — {review_error}", icon="🤖")
+        st.divider()
         hits = nw.contract_hits(articles)
         counts = articles["group"].value_counts()
         metric_row([
