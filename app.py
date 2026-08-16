@@ -301,38 +301,6 @@ with tabs[2]:
     })[["티커", "기업", "세부업종", "그룹", "계약 커버리지(%)", "T0", "흑자 전환", "T0→흑자(년)",
         "고점대비(%)", "결과 근거", "무엇이 무너졌나"]])
 
-    st.markdown("##### 주가 결과 — 펀더멘탈 유지 여부로 나눴을 때")
-    prices = summary.dropna(subset=["from_peak_pct"]).copy()
-    fermi_peak = None
-    if not price_frame.empty:
-        recent = price_frame[price_frame["date"] >= "2020-01-01"]
-        if not recent.empty:
-            fermi_peak = (float(recent["close"].iloc[-1]) / float(recent["close"].max()) - 1) * 100
-    chart = prices[["company", "group", "from_peak_pct"]].copy()
-    if fermi_peak is not None:
-        chart = pd.concat([chart, pd.DataFrame([
-            {"company": "Fermi ← 현재", "group": "대상", "from_peak_pct": round(fermi_peak, 1)}])])
-    chart["라벨"] = chart["company"] + " (" + chart["group"].astype(str) + ")"
-    chart = chart.sort_values("from_peak_pct", ascending=False)
-    st.plotly_chart(bar(chart, "라벨", "from_peak_pct", th.SERIES[0], unit="%", digits=1,
-                        horizontal=True, height=420), use_container_width=True)
-    st.caption(
-        "2020년 이후 구간만으로 쟀다. Plug Power와 FuelCell은 2000년 수소 버블에 고점이 있어 "
-        "그대로 재면 시대가 달라지기 때문이다."
-    )
-
-    by_group = sc.price_by_group()
-    if not by_group.empty:
-        st.markdown("**그룹별 요약** (고점 대비 현재, %)")
-        table(by_group.rename(columns={"group": "그룹", "count": "기업 수", "mean": "평균",
-                                       "min": "최악", "max": "최선"}))
-    st.info(
-        "**두 구간이 겹치지 않는다.** 펀더멘탈을 유지한 그룹은 최악이 -42%, 유지하지 못한 그룹은 "
-        "최선이 -96%다. 그리고 이 붕괴는 갑자기 오지 않았다 — New Fortress는 3년에 걸쳐 "
-        "$60에서 $0.32로 갔고, 영업현금흐름이 흑자에서 적자로 뒤집힌 것이 먼저 나온 신호였다.",
-        icon="📉",
-    )
-
     st.markdown("##### 지금의 페르미와 같은 위치였던 해, 그 뒤 주가는")
     st.caption(
         f"페르미는 {sc.FERMI_T0}년에 대규모 자본 투입을 시작했고 지금은 **T0+{sc.FERMI_STAGE_OFFSET}년차**다. "

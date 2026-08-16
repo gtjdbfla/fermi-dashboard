@@ -193,15 +193,6 @@ def coverage_benchmark() -> dict:
     return out
 
 
-def price_by_group() -> pd.DataFrame:
-    """그룹별 주가 결과 요약. 유지와 붕괴 사이에 구간이 겹치는지 보는 표."""
-    frame = summary().dropna(subset=["from_peak_pct"])
-    if frame.empty:
-        return frame
-    grouped = frame.groupby("group", observed=True)["from_peak_pct"].agg(["count", "mean", "min", "max"])
-    return grouped.round(1).reset_index()
-
-
 def fermi_position(m: dict) -> list[dict]:
     """검증에서 살아남은 세 지표에 페르미를 놓는다."""
     contracted = m.get("mw_contracted") or 0
