@@ -148,6 +148,10 @@ def stage_matched(offset: int = FERMI_STAGE_OFFSET) -> pd.DataFrame:
         then_row = series[series["year"] == matched_year]
         now_row = series[series["year"] == latest_year]
         then = float(then_row.iloc[0]["close"]) if not then_row.empty else None
+        # 경과 기간은 실제 관측 월로 잰다. 연도 차이로 근사하면 12월 종가와 8월 종가를 비교할 때
+        # 최대 1년 가까이 부풀려져 연환산 수익률이 낮게 나온다.
+        then_asof = pd.Period(then_row.iloc[0]["asof"], freq="M") if not then_row.empty else None
+        now_asof = pd.Period(now_row.iloc[0]["asof"], freq="M") if not now_row.empty else None
         # 상장폐지된 곳은 마지막 거래가 대신 인수가를 쓴다(프로필에 근거를 적어 둔다).
         final_price = profile.get("final_price") if hasattr(profile, "get") else None
         now = float(final_price) if pd.notna(final_price) else (
@@ -158,8 +162,9 @@ def stage_matched(offset: int = FERMI_STAGE_OFFSET) -> pd.DataFrame:
             revenue.iloc[0]["revenue"]) else None
 
         multiple = (now / then) if (then and now) else None
-        years = latest_year - matched_year + 0.6  # 연말 종가 기준이라 반년 남짓을 더한다
-        cagr = ((multiple ** (1 / years) - 1) * 100) if (multiple and multiple > 0 and years > 0) else None
+        years = ((now_asof - then_asof).n / 12) if (then_asof is not None and now_asof is not None) else None
+        cagr = ((multiple ** (1 / years) - 1) * 100) if (
+            multiple and multiple > 0 and years and years > 0) else None
 
         rows.append({
             "ticker": ticker, "company": item["company"], "group": str(item["group"]),
@@ -167,6 +172,7 @@ def stage_matched(offset: int = FERMI_STAGE_OFFSET) -> pd.DataFrame:
             "revenue_then": revenue,
             "price_then": then, "price_now": now,
             "multiple": multiple,
+            "years_held": round(years, 1) if years else None,
             "total_return_pct": (multiple - 1) * 100 if multiple else None,
             "cagr_pct": cagr,
             "gap_reason": profile.get("price_gap_reason") if hasattr(profile, "get") else None,

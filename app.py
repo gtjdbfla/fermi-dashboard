@@ -355,6 +355,7 @@ with tabs[2]:
     view["그룹"] = view["group"].astype(str)
     view["그해 매출"] = view["revenue_then"].map(lambda v: fd.usd(v) if pd.notna(v) else "0 / 미상")
     view["배수"] = view["multiple"].map(lambda v: f"{v:,.2f}배" if pd.notna(v) else "–")
+    view["경과"] = view["years_held"].map(lambda v: f"{v:,.1f}년" if pd.notna(v) else "–")
     for column, source in [("그때 주가", "price_then"), ("현재 주가", "price_now")]:
         view[column] = view[source].map(lambda v: f"${v:,.2f}" if pd.notna(v) else "–")
     for column, source in [("총수익률(%)", "total_return_pct"), ("연환산(%)", "cagr_pct")]:
@@ -362,7 +363,7 @@ with tabs[2]:
     table(view.rename(columns={"ticker": "티커", "company": "기업", "t0": "T0",
                                "matched_year": "같은 위치였던 해", "gap_reason": "시세 공백 사유"})
           [["티커", "기업", "그룹", "T0", "같은 위치였던 해", "그해 매출", "그때 주가", "현재 주가",
-            "배수", "총수익률(%)", "연환산(%)", "시세 공백 사유"]])
+            "배수", "경과", "총수익률(%)", "연환산(%)", "시세 공백 사유"]])
 
     if not priced.empty:
         st.markdown("**그룹별 연환산 수익률** (%/년)")
@@ -375,7 +376,7 @@ with tabs[2]:
         "**이 표를 그대로 페르미에 대입하면 안 되는 이유가 셋 있다.** "
         "① 시세를 구할 수 있는 기업이 그룹당 3곳뿐이다. "
         "② 유지 그룹의 기준 시점이 2023~2024년인 곳(Bloom·Applied Digital)은 AI 인프라 랠리 구간과 "
-        "겹쳐 펀더멘탈만의 효과가 아니다. 13년에 걸친 Cheniere의 연 14.5%가 순수한 인프라 사이클에 더 가깝다. "
+        "겹쳐 펀더멘탈만의 효과가 아니다. 12.7년에 걸친 Cheniere의 연 15.6%가 순수한 인프라 사이클에 더 가깝다. "
         "③ **유지 그룹 3곳은 그 시점에 이미 매출이 있었다.** 그때도 매출이 0이었던 곳은 NextDecade와 "
         "Oklo뿐이고 둘 다 아직 미결이다. 페르미와 진짜로 같은 위치였던 기업들은 아직 답을 내놓지 않았다.",
         icon="⚠️",
