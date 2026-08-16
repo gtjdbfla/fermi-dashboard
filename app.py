@@ -13,6 +13,7 @@ import streamlit as st
 
 import fundamentals as fd
 import market
+import market_flow as mflow
 import sec_edgar as sec
 import sector as sc
 import theme as th
@@ -74,6 +75,20 @@ def line(frame, x, y, name, unit="", height=300):
                        line=dict(color=th.SERIES[0], width=2),
                        hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.2f} " + unit + "<extra></extra>")
     th.style(figure, height=height)
+    figure.update_layout(hovermode="x unified")
+    return figure
+
+
+def compare_line(frame, x, series, unit="", height=320):
+    """같은 축의 계열 2개를 겹쳐 그린다. 이중 축은 쓰지 않는다."""
+    figure = go.Figure()
+    for index, (column, name) in enumerate(series):
+        figure.add_scatter(x=frame[x], y=frame[column], mode="lines", name=name,
+                           line=dict(color=th.SERIES[index], width=2.5 if index == 0 else 2,
+                                     dash="solid" if index == 0 else "dot"),
+                           hovertemplate="%{x|%Y-%m-%d} · " + name + "<br>%{y:,.1f} " + unit
+                                         + "<extra></extra>")
+    th.style(figure, height=height, legend=True)
     figure.update_layout(hovermode="x unified")
     return figure
 
@@ -167,7 +182,8 @@ for column, item in zip(st.columns(3), sc.fermi_position(m)):
         if item["detail"]:
             st.caption(item["detail"])
 
-tabs = st.tabs(["① 계약 커버리지", "② 현금흐름 전환", "③ 섹터 검증", "참고 지표", "원본 데이터"])
+tabs = st.tabs(["① 계약 커버리지", "② 현금흐름 전환", "③ 섹터 검증", "④ 시장·수급",
+                "참고 지표", "원본 데이터"])
 
 # ── ① 계약 커버리지 ───────────────────────────────────────────────────────────
 with tabs[0]:
@@ -379,8 +395,120 @@ with tabs[2]:
                                         "자기자본", "장기차입", "주식수(백만)"]])
         st.caption("단위 백만 달러. SEC EDGAR XBRL — `python refresh_sector.py`로 갱신한다.")
 
-# ── 참고 지표 ─────────────────────────────────────────────────────────────────
+# ── ④ 시장·수급 ───────────────────────────────────────────────────────────────
 with tabs[3]:
+    st.markdown("#### 주가가 왜 움직였는가")
+    st.caption(
+        "**이 탭은 펀더멘탈이 아니다.** 회사의 건강이 아니라 주가 움직임을 설명하는 층이다. "
+        "상장 후 219거래일로 실측한 결과 페르미는 AI 인프라 동종주와 상관 0.39~0.45로 붙어 다녔고, "
+        "금리(10년 실질 -0.13)와 천연가스(-0.05)는 예상보다 훨씬 약했다. 그래서 여기서는 "
+        "**테마에서 오는 몫을 걷어내고 페르미 고유 움직임만** 남기는 데 집중한다."
+    )
+
+    with st.spinner("시장·수급 데이터 불러오는 중..."):
+        basket = mflow.basket_frame()
+        theme = mflow.theme_view(basket)
+        stats = mflow.theme_stats(basket)
+        shorts = mflow.short_interest()
+
+    st.markdown("##### 축 A — 테마 동조도")
+    if stats:
+        metric_row([
+            ("바스켓 상관 (전체)", fd.num(stats.get("corr_full"), 3),
+             "일간 수익률 기준. 1에 가까울수록 테마와 같이 움직인다"),
+            (f"바스켓 상관 (최근 {mflow.ROLLING_WINDOW}일)", fd.num(stats.get("corr_rolling"), 3),
+             "최근 들어 동조도가 커졌는지 작아졌는지"),
+            ("1개월 상대강도", fd.num(stats.get("rs_1개월"), 1, "%p"),
+             f"페르미 {fd.num(stats.get('fermi_1개월'), 1, '%')} vs 바스켓 {fd.num(stats.get('basket_1개월'), 1, '%')}"),
+            ("3개월 상대강도", fd.num(stats.get("rs_3개월"), 1, "%p"),
+             f"페르미 {fd.num(stats.get('fermi_3개월'), 1, '%')} vs 바스켓 {fd.num(stats.get('basket_3개월'), 1, '%')}"),
+        ])
+
+    if not theme.empty:
+        st.markdown("**상장일을 100으로 맞춘 추이**")
+        st.plotly_chart(compare_line(theme, "date", [("페르미", "페르미"), ("바스켓", "AI 인프라 바스켓")]),
+                        use_container_width=True)
+        last = theme.iloc[-1]
+        st.caption(
+            f"상장 이후 페르미 **{last['페르미']:,.0f}** vs 바스켓 **{last['바스켓']:,.0f}** (기준 100). "
+            "두 선이 벌어진 폭이 테마로 설명되지 않는 페르미 고유의 몫이다. "
+            f"바스켓은 {', '.join(stats.get('members', []))} 동일가중이며, 시총가중으로 하면 "
+            "CoreWeave 하나가 지수를 지배해 '테마'가 아니라 'CoreWeave 대비'가 된다."
+        )
+        table(theme.assign(날짜=theme["date"].dt.date).rename(
+            columns={"페르미": "페르미(100기준)", "바스켓": "바스켓(100기준)"})
+            [["날짜", "페르미(100기준)", "바스켓(100기준)"]].tail(10).round(1))
+
+    peers = mflow.peer_correlations(basket)
+    if not peers.empty:
+        st.markdown("**구성종목별 상관**")
+        left, right = st.columns([0.55, 0.45])
+        with left:
+            st.plotly_chart(bar(peers, "종목", "상관", th.SERIES[0], unit="", digits=3,
+                                horizontal=True, height=240), use_container_width=True)
+        with right:
+            table(peers)
+
+    st.divider()
+    st.markdown("##### 축 B — 종목 수급")
+    if not shorts.empty:
+        latest = shorts.iloc[-1]
+        shares_out = m.get("shares_out")
+        metric_row([
+            ("공매도 잔고", fd.num(latest["shares"] / 1e6, 1, "백만주"),
+             f"결제일 {latest['date'].date()} · 격주 공시"),
+            ("발행주식 대비", fd.pct(latest["shares"] / shares_out) if shares_out else "–",
+             "발행주식수 대비 공매도 비율"),
+            ("Days to cover", fd.num(latest["days_to_cover"], 2, "일"),
+             "평균 거래량 기준 환매수에 걸리는 일수"),
+            ("기관 보유", mflow.ownership().get("SharesOutstandingPCT", "–"),
+             "13F 기준 · 분기 공시라 시차가 있다"),
+        ])
+        chart = shorts.copy()
+        chart["결제일"] = chart["date"].dt.strftime("%y-%m-%d")
+        chart["잔고(백만주)"] = chart["shares"] / 1e6
+        st.plotly_chart(bar(chart, "결제일", "잔고(백만주)", th.SERIES[0], unit="백만주", digits=1),
+                        use_container_width=True)
+
+        hedge = mflow.convertible_hedge(shorts, m.get("conv_shares"))
+        if hedge:
+            st.info(
+                f"**공매도 급증분은 하락 베팅이 아닐 수 있다.** "
+                f"{hedge['before_date'].date()} {hedge['before']/1e6:,.1f}백만주 → "
+                f"{hedge['after_date'].date()} {hedge['after']/1e6:,.1f}백만주로 "
+                f"**{hedge['increase']/1e6:,.1f}백만주** 늘었는데, 그 사이 "
+                f"{hedge['issue_date'].date()}에 전환사채가 발행됐다. 전환 가능 주식수 "
+                f"{hedge['conv_shares']/1e6:,.1f}백만주의 **{hedge['coverage']*100:,.0f}%**에 해당한다.\n\n"
+                "전환사채를 산 쪽은 보통 주식을 빌려 팔아 델타를 중립으로 맞춘다. 초기 헤지는 통상 "
+                "전환주식수의 30~60% 선이라, 이 증가분은 헤지로 설명되는 범위 안에 있다. "
+                "하락 베팅과 섞어 읽으면 수급을 정반대로 해석하게 된다.",
+                icon="🔁",
+            )
+        table(shorts.assign(결제일=shorts["date"].dt.date).rename(columns={
+            "shares": "공매도 잔고", "avg_volume": "평균 거래량", "days_to_cover": "Days to cover"})
+            [["결제일", "공매도 잔고", "평균 거래량", "Days to cover"]].iloc[::-1].round(2))
+    else:
+        st.warning("공매도 잔고를 불러오지 못했다(Nasdaq API). 잠시 후 다시 시도하면 된다.", icon="⚠️")
+
+    insiders = mflow.insider_activity()
+    if not insiders.empty:
+        st.markdown("**내부자 거래 요약**")
+        table(insiders)
+        st.caption(
+            "건수만 집계된 값이다. 금액과 개별 내역은 **참고 지표 → 지배구조** 탭의 SEC 공시 "
+            "목록에서 Form 4를 직접 열어 확인한다."
+        )
+
+    st.warning(
+        "**이 지표들로 펀더멘탈을 판단하지 않는다.** 상관 0.46은 인과가 아니라 같은 테마에 실려 있다는 "
+        "뜻일 뿐이고, 관측 구간도 219거래일에 불과하다. 쓰임새는 하나다 — 공시가 났을 때 주가가 "
+        "움직인 것이 **그 공시 때문인지 그날 AI주가 다 움직인 것인지** 가르는 것.",
+        icon="⚠️",
+    )
+
+
+# ── 참고 지표 ─────────────────────────────────────────────────────────────────
+with tabs[4]:
     st.markdown("#### 판정에서 내린 항목들")
     st.caption(
         "섹터 검증에서 생존과 붕괴를 가르지 못한 항목이다. 지우면 맥락을 잃으므로 참고로만 남긴다. "
@@ -470,7 +598,7 @@ with tabs[3]:
                                     use_container_width=True)
 
 # ── 원본 데이터 ───────────────────────────────────────────────────────────────
-with tabs[4]:
+with tabs[5]:
     st.markdown("#### 데이터 출처")
     st.markdown(
         f"""
