@@ -14,6 +14,7 @@ import streamlit as st
 import fundamentals as fd
 import market
 import market_flow as mflow
+import news as nw
 import roadmap as rm
 import sec_edgar as sec
 import sector as sc
@@ -184,7 +185,7 @@ for column, item in zip(st.columns(3), sc.fermi_position(m)):
             st.caption(item["detail"])
 
 tabs = st.tabs(["① 계약 커버리지", "② 현금흐름 전환", "③ 로드맵", "④ 섹터 검증", "⑤ 시장·수급",
-                "참고 지표", "원본 데이터"])
+                "⑥ 뉴스·소문", "참고 지표", "원본 데이터"])
 
 # ── ① 계약 커버리지 ───────────────────────────────────────────────────────────
 with tabs[0]:
@@ -635,8 +636,82 @@ with tabs[4]:
     )
 
 
-# ── 참고 지표 ─────────────────────────────────────────────────────────────────
+# ── ⑥ 뉴스·소문 ───────────────────────────────────────────────────────────────
 with tabs[5]:
+    st.markdown("#### 계약 숫자를 바꿀 소식이 떴는가")
+    st.caption(
+        "**뉴스는 펀더멘탈이 아니다.** 이 화면의 목적은 하나다 — 핵심 판정 ①(계약 커버리지 "
+        f"{fd.pct(m.get('contracted_vs_landed'))})을 바꿀 소식을 먼저 알아채는 것. 그래서 제목에서 "
+        "계약·테넌트 키워드를 뽑아 맨 위로 올린다. **확정은 SEC 공시로만 한다** — 대시보드의 "
+        "계약 MW 숫자는 8-K를 근거로만 갱신된다."
+    )
+
+    with st.spinner("뉴스 불러오는 중..."):
+        articles = nw.collect()
+        chatter = nw.community()
+
+    if articles.empty:
+        st.warning("뉴스를 불러오지 못했다. 잠시 후 다시 시도하면 된다.", icon="⚠️")
+    else:
+        hits = nw.contract_hits(articles)
+        counts = articles["group"].value_counts()
+        metric_row([
+            ("전체 기사", f"{len(articles)}건", "Google 뉴스 · Yahoo · Nasdaq 합산, 중복 제거"),
+            ("🎯 계약·테넌트", f"{counts.get('계약·테넌트', 0)}건", "핵심 판정을 바꿀 수 있는 소식"),
+            ("💰 자금조달", f"{counts.get('자금조달', 0)}건", "증자·사채·차입"),
+            ("⚠️ 일정·리스크", f"{counts.get('일정·리스크', 0)}건", "지연·취소·소송·공매도 리포트"),
+        ])
+
+        st.markdown("##### 🎯 계약·테넌트 관련")
+        if hits.empty:
+            st.info("최근 계약·테넌트 관련 기사가 없다.", icon="🔍")
+        else:
+            feed = hits.head(25).copy()
+            feed["날짜"] = feed["published"].dt.tz_convert("Asia/Seoul").dt.strftime("%m-%d %H:%M")
+            table(feed.rename(columns={"title": "제목", "source": "매체", "url": "링크"})
+                  [["날짜", "제목", "매체", "링크"]],
+                  column_config={"링크": st.column_config.LinkColumn("링크", display_text="열기")},
+                  height=320)
+
+        st.markdown("##### 전체 기사")
+        picked_group = st.selectbox("분류", ["전체"] + list(counts.index), index=0)
+        feed = articles if picked_group == "전체" else articles[articles["group"] == picked_group]
+        feed = feed.head(80).copy()
+        feed["날짜"] = feed["published"].dt.tz_convert("Asia/Seoul").dt.strftime("%m-%d %H:%M")
+        feed["분류"] = feed["group"].map(lambda g: f"{nw.GROUP_ICON.get(g, '·')} {g}")
+        table(feed.rename(columns={"title": "제목", "source": "매체", "url": "링크"})
+              [["날짜", "분류", "제목", "매체", "링크"]],
+              column_config={"링크": st.column_config.LinkColumn("링크", display_text="열기")},
+              height=420)
+
+    st.markdown("##### 커뮤니티 반응 (Stocktwits)")
+    st.warning(
+        "**검증되지 않은 개인 게시글이다.** 추측·루머·의도적 허위가 섞일 수 있고, 여기 적힌 수치는 "
+        "어떤 것도 확인된 사실이 아니다. 대시보드의 어떤 숫자도 이 글들을 근거로 바뀌지 않는다. "
+        "분위기를 보는 용도로만 둔다.",
+        icon="🗣️",
+    )
+    if chatter.empty:
+        st.caption("커뮤니티 데이터를 불러오지 못했다.")
+    else:
+        view = chatter.head(30).copy()
+        view["날짜"] = view["published"].dt.tz_convert("Asia/Seoul").dt.strftime("%m-%d %H:%M")
+        view["분류"] = view["group"].map(lambda g: f"{nw.GROUP_ICON.get(g, '·')} {g}")
+        table(view.rename(columns={"body": "내용", "user": "작성자", "url": "링크"})
+              [["날짜", "분류", "내용", "작성자", "링크"]],
+              column_config={"링크": st.column_config.LinkColumn("링크", display_text="열기")},
+              height=340)
+
+    st.info(
+        "**공식 확인은 여기서 한다.** 계약이 실제로 체결되면 8-K가 올라오고, 그러면 상단 배너가 "
+        "'수동 데이터가 낡았을 수 있습니다'로 바뀐다. 월요일 09:00 클라우드 루틴이 그 8-K를 읽고 "
+        "`data/contracts.csv`를 직접 고쳐 커밋한다. 뉴스는 그보다 먼저 알아채는 용도다.",
+        icon="📋",
+    )
+
+
+# ── 참고 지표 ─────────────────────────────────────────────────────────────────
+with tabs[6]:
     st.markdown("#### 판정에서 내린 항목들")
     st.caption(
         "섹터 검증에서 생존과 붕괴를 가르지 못한 항목이다. 지우면 맥락을 잃으므로 참고로만 남긴다. "
@@ -726,7 +801,7 @@ with tabs[5]:
                                     use_container_width=True)
 
 # ── 원본 데이터 ───────────────────────────────────────────────────────────────
-with tabs[6]:
+with tabs[7]:
     st.markdown("#### 데이터 출처")
     st.markdown(
         f"""
