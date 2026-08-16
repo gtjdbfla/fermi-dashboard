@@ -14,6 +14,7 @@
 from pathlib import Path
 
 import pandas as pd
+import requests
 import streamlit as st
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -195,7 +196,32 @@ def stage_matched(offset: int = FERMI_STAGE_OFFSET) -> pd.DataFrame:
     return frame.sort_values(["group", "cagr_pct"], ascending=[True, False]).reset_index(drop=True)
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
+def market_caps() -> dict:
+    """티커별 현재 시가총액. Nasdaq 공개 API에서 받는다.
+
+    주가 × 발행주식수로 계산하지 않는 이유: XBRL 발행주식수가 비어 있는 기업이 있고
+    (Venture Global, NuScale), 액면병합을 겪은 곳은 시점이 어긋난다. 시가총액은 결과값이라
+    출처에서 그대로 받는 편이 안전하다.
+    """
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                             "AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+               "Accept": "application/json"}
+    caps = {}
+    for ticker in load_profiles().get("ticker", pd.Series(dtype=str)):
+        try:
+            response = requests.get(f"https://api.nasdaq.com/api/quote/{ticker}/summary",
+                                    params={"assetclass": "stocks"}, headers=headers, timeout=20)
+            raw = ((response.json().get("data") or {}).get("summaryData") or {}) \
+                .get("MarketCap", {}).get("value")
+            value = float(str(raw).replace(",", "")) if raw else None
+            caps[ticker] = value if value else None
+        except Exception:
+            caps[ticker] = None
+    return caps
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def company_view() -> pd.DataFrame:
     """기업 하나당 한 행. 지표별로 흩어진 표를 합쳐 기업 단위로 읽게 한다.
 
@@ -213,6 +239,7 @@ def company_view() -> pd.DataFrame:
         on="ticker", how="left")
     if not profiles.empty:
         frame = frame.merge(profiles[["ticker", "contract_detail"]], on="ticker", how="left")
+    frame["market_cap"] = frame["ticker"].map(market_caps())
     frame["has_price"] = frame["total_return_pct"].notna()
     return frame.sort_values(["has_price", "total_return_pct"],
                              ascending=[False, False]).reset_index(drop=True)

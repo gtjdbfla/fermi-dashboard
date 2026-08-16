@@ -387,18 +387,35 @@ with tabs[3]:
 
     companies = sc.company_view()
     priced = companies.dropna(subset=["total_return_pct"]).copy()
-    if not priced.empty:
-        st.markdown("**전체 순위** (총수익률, %)")
-        overview = priced.sort_values("total_return_pct", ascending=False).copy()
-        overview["라벨"] = overview.apply(
-            lambda r: f"{r['company']} ({r['group']}"
-                      + (" · 상장 후" if r["basis"] == "상장/재상장 후" else "") + ")", axis=1)
-        st.plotly_chart(bar(overview, "라벨", "total_return_pct", th.SERIES[0], unit="%", digits=1,
-                            horizontal=True, height=320), use_container_width=True)
-        st.caption(
-            "**'상장 후' 표시가 붙은 곳은 출발점이 다르다.** Talen과 Core Scientific은 파산 직후 "
-            "재상장이라 바닥에서 시작해 수익률이 크게 잡힌다. 같은 잣대로 비교하면 안 된다."
-        )
+    rank_col, cap_col = st.columns(2)
+    with rank_col:
+        if not priced.empty:
+            st.markdown("**총수익률** (%)")
+            overview = priced.sort_values("total_return_pct", ascending=False).copy()
+            overview["라벨"] = overview.apply(
+                lambda r: f"{r['company']} ({r['group']}"
+                          + (" · 상장 후" if r["basis"] == "상장/재상장 후" else "") + ")", axis=1)
+            st.plotly_chart(bar(overview, "라벨", "total_return_pct", th.SERIES[0], unit="%",
+                                digits=1, horizontal=True, height=330), use_container_width=True)
+    with cap_col:
+        caps = companies.dropna(subset=["market_cap"]).copy()
+        if not caps.empty:
+            st.markdown("**시가총액** (십억 달러)")
+            caps["십억$"] = caps["market_cap"] / 1e9
+            caps["라벨"] = caps["company"] + " (" + caps["group"].astype(str) + ")"
+            fermi_cap = m.get("market_cap")
+            if fermi_cap:
+                caps = pd.concat([caps, pd.DataFrame([
+                    {"라벨": "★ Fermi ← 현재", "십억$": fermi_cap / 1e9}])])
+            caps = caps.sort_values("십억$", ascending=False)
+            st.plotly_chart(bar(caps, "라벨", "십억$", th.SERIES[0], unit="십억$", digits=1,
+                                horizontal=True, height=330), use_container_width=True)
+    st.caption(
+        "**'상장 후' 표시가 붙은 곳은 출발점이 다르다.** Talen과 Core Scientific은 파산 직후 "
+        "재상장이라 바닥에서 시작해 수익률이 크게 잡힌다. 같은 잣대로 비교하면 안 된다. "
+        "시가총액은 규모를 견주는 눈금이다 — 페르미가 유지 그룹 수준에 도달한다는 것이 "
+        "몇 배를 뜻하는지 보여준다."
+    )
 
     STATUS_BY_GROUP = {"유지": "good", "진행중": "info", "붕괴": "critical"}
     for rank, row in enumerate(companies.itertuples(), start=1):
@@ -409,6 +426,8 @@ with tabs[3]:
                 f"{th.STATUS_ICON[STATUS_BY_GROUP.get(group, 'info')]} {group} &nbsp;·&nbsp; {row.sub}"
             )
             metric_row([
+                ("시가총액", fd.usd(row.market_cap) if pd.notna(row.market_cap) else "–",
+                 "현재 기준. 페르미와 규모를 견줘 보는 눈금"),
                 ("계약 커버리지", fd.num(row.coverage, 0, "%") if pd.notna(row.coverage) else "미공개",
                  "대규모 자본 투입 시점에 장기계약으로 덮인 용량 비중"),
                 ("총수익률", fd.num(row.total_return_pct, 1, "%") if pd.notna(row.total_return_pct) else "–",
