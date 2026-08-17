@@ -234,12 +234,12 @@ def tenant_events(names: list[str] | None = None) -> list[dict]:
             if name.lower() not in lowered or not re.search(TENANT_TROUBLE, lowered):
                 continue
             key = re.sub(r"[^a-z0-9가-힣]", "", lowered)[:70]
+            published = pd.to_datetime(item.findtext("pubDate"), errors="coerce", utc=True)
             events.append({
                 "id": f"tenant:{key}",
                 "tier": "테넌트",
                 "kind": name,
-                "when": str(pd.to_datetime(item.findtext("pubDate"), errors="coerce",
-                                           utc=True).date()),
+                "when": str(published.date()) if pd.notna(published) else "날짜 불명",
                 "form": "", "items": "", "excerpt": "",
                 "title": title.strip(),
                 "url": item.findtext("link") or "",
@@ -305,9 +305,22 @@ def status_icon(status: str) -> str:
     return th.STATUS_ICON.get(status, "⚪")
 
 
-def compose_state(event: dict, m: dict, verdicts: list[dict]) -> str:
-    lines = [f"📊 <b>{_escape(event['kind'])}</b>", "", _escape(event["detail"]), "",
-             "<b>핵심 판정</b>"]
+def compose_state(events: list[dict], m: dict, verdicts: list[dict]) -> str:
+    """한 분기에 여러 전환이 동시에 일어나므로 **한 통으로 묶는다.**
+
+    첫 매출·흑자 전환·로드맵 단계·분기 반영이 같은 10-Q에서 한꺼번에 걸리는데, 따로 보내면
+    같은 사건으로 네 번 울린다.
+    """
+    if not events:
+        return ""
+    single = len(events) == 1
+    lines = [f"📊 <b>{_escape(events[0]['kind'] if single else '분기 실적 — 판정 변경')}</b>", ""]
+    for event in events:
+        if not single:
+            lines.append(f"<b>• {_escape(event['kind'])}</b>")
+        lines += [_escape(event["detail"]), ""]
+
+    lines.append("<b>핵심 판정</b>")
     for item in verdicts:
         lines.append(f"{status_icon(item.get('status'))} {_escape(item['label'])} — "
                      f"{_escape(item['value'])}")
@@ -372,16 +385,20 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
               + news_events(articles)
               + tenant_events())
 
-    # 상태 변화는 지문이 아니라 이전 값과의 비교로 잡는다. 스냅샷은 항상 갱신한다.
+    # 상태 변화는 지문이 아니라 이전 값과의 비교로 잡는다.
+    #
+    # **스냅샷은 발송에 성공했을 때만 앞으로 민다.** 무조건 갱신하면, 분기 실적이 들어온
+    # 순간 텔레그램이 죽어 있었을 때 다음 실행에서는 '이전 값 = 새 값'이 되어 그 알림이
+    # 영원히 사라진다. 1년에 네 번뿐인 알림을 그렇게 잃으면 안 된다.
     current = snapshot(m, steps_done)
     changes = state_events(current, store.get("snapshot") or {})
-    store["snapshot"] = current
 
     fresh = [event for event in events if event["id"] not in known]
     fresh_changes = [event for event in changes if event["id"] not in known]
 
     if first_run:
         # 과거 것을 몰아 보내지 않는다. 지금 상태를 기준선으로 삼는다.
+        store["snapshot"] = current
         _remember(store, [event["id"] for event in events], first_run_done=True)
         ok, error = send(
             "✅ <b>페르미 알림 켜짐</b>\n\n"
@@ -394,16 +411,18 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
                 "error": "" if ok else error}
 
     if not (fresh or fresh_changes):
+        store["snapshot"] = current          # 바뀐 게 없으니 그대로 밀어도 잃을 알림이 없다
         _remember(store, [], first_run_done=True)
         return {"sent": 0, "skipped": len(events), "seeded": False, "error": ""}
 
-    sent, failures = [], []
-    for event in fresh_changes:
-        ok, error = send(compose_state(event, m, verdicts or []))
+    sent, failures, changes_failed = [], [], False
+    if fresh_changes:
+        ok, error = send(compose_state(fresh_changes, m, verdicts or []))
         if ok:
-            sent.append(event["id"])
+            sent += [event["id"] for event in fresh_changes]
         else:
             failures.append(error)
+            changes_failed = True
     for event in fresh:
         ok, error = send(compose(event, m))
         if ok:
@@ -411,6 +430,9 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
         else:
             failures.append(error)
 
+    # 상태 알림을 하나라도 못 보냈으면 이전 스냅샷을 남겨 다음 실행에서 다시 잡게 한다.
+    if not changes_failed:
+        store["snapshot"] = current
     store["last_sent"] = pd.Timestamp.now(tz="UTC").isoformat() if sent else store.get("last_sent")
     # 실패한 건은 기억하지 않는다. 다음 크론에서 다시 시도한다.
     _remember(store, sent, first_run_done=True)
