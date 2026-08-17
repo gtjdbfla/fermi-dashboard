@@ -53,10 +53,14 @@ def available() -> bool:
 
 def fingerprint(articles: pd.DataFrame, chatter: pd.DataFrame) -> str:
     """분석 대상이 바뀌었는지 판단하는 지문. 이게 바뀔 때만 API를 다시 부른다."""
-    titles = list(articles.head(MAX_ARTICLES)["title"]) if not articles.empty else []
-    bodies = list(chatter.head(MAX_POSTS)["body"]) if not chatter.empty else []
-    raw = "".join(titles + bodies)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    # 커뮤니티 글 전체를 넣으면 안 된다. Stocktwits는 몇 분마다 새 글이 올라와 기사 목록이
+    # 그대로여도 지문이 계속 바뀌고, 30분마다 같은 내용을 다시 분석하게 된다(실행 5회 중
+    # 2회가 그랬다). 기사 제목과 계약·테넌트로 분류된 글만 넣고, 정렬해 순서 변화도 걸러낸다.
+    titles = sorted(articles.head(MAX_ARTICLES)["title"]) if not articles.empty else []
+    bodies = []
+    if not chatter.empty and "group" in chatter.columns:
+        bodies = sorted(chatter[chatter["group"] == "계약·테넌트"].head(MAX_POSTS)["body"])
+    return hashlib.sha256("".join(titles + bodies).encode("utf-8")).hexdigest()[:16]
 
 
 def _payload(articles: pd.DataFrame, chatter: pd.DataFrame) -> str:
