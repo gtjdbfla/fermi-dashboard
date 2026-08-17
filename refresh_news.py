@@ -42,8 +42,33 @@ def warm_market() -> None:
             print(f"[warn] {label} 갱신 실패: {type(error).__name__}: {error}")
 
 
+def warm_filings() -> None:
+    """새 SEC 공시를 AI로 판독해 캐시에 남긴다.
+
+    주 1회 클라우드 루틴에 맡겼던 일인데, 그쪽 샌드박스가 SEC 도메인을 egress 차단해서
+    (2026-08-17 실행에서 확인) 서버로 옮겼다. CSV는 고치지 않고 판정만 남긴다.
+    """
+    try:
+        import fundamentals as fd
+        import market
+        import sec_edgar as sec
+        import filing_review as fr
+        m = raw(fd.compute)(raw(sec.load_company_facts)(), raw(market.load_price)("FRMI")[1])
+        result = fr.run(m, fd.manual_data_asof())
+        if result.get("error"):
+            print(f"[warn] 공시 판독 실패: {result['error']}")
+        elif result["count"] == 0:
+            print("[ok] 신규 공시 없음")
+        else:
+            headline = (result["text"].splitlines() or [""])[0][:60]
+            print(f"[ok] 공시 {result['count']}건 판독 — {headline}")
+    except Exception as error:
+        print(f"[warn] 공시 판독 실패: {type(error).__name__}: {error}")
+
+
 def main() -> int:
     warm_market()
+    warm_filings()
     articles = raw(news.collect)()
     chatter = raw(news.community)()
     if articles.empty:

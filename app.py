@@ -15,6 +15,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import ai_review
+import filing_review as fr
 import fundamentals as fd
 import market
 import market_flow as mflow
@@ -180,6 +181,15 @@ stale = fd.staleness(m)
 if stale["count"] > 0:
     st.warning(f"**수동 데이터가 낡았을 수 있다** — {pd.Timestamp(stale['asof']).date()} 이후 "
                f"새 공시 {stale['count']}건.", icon="🔔")
+    review = fr.cached()
+    if review.get("text"):
+        with st.container(border=True):
+            st.markdown("**🤖 공시 판독**")
+            st.markdown(review["text"])
+        st.caption("서버 크론이 30분마다 새 공시를 읽어 판정한다. **CSV는 자동으로 바뀌지 않는다** — "
+                   "확정 반영은 저장소에 커밋해야 한다.")
+    elif review.get("error"):
+        st.caption(f"공시 판독 대기 — {review['error']}")
     feed = stale["filings"].copy()
     feed["접수일"] = feed["filed"].dt.date
     table(feed.rename(columns={"form": "종류", "title": "제목", "url": "링크"})
