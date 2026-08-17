@@ -174,11 +174,15 @@ def quarter_label(timestamp) -> str:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def load_filings(limit: int = 300) -> pd.DataFrame:
-    """최근 공시 목록. 컬럼: filed, report, form, group, title, url."""
+    """최근 공시 목록. 컬럼: filed, report, form, group, title, items, url.
+
+    items는 8-K의 항목 코드다("1.01,9.01" 꼴). 계약 체결(1.01)·해지(1.02)를 제목이 아니라
+    코드로 잡을 수 있어서, 알림이 회사가 뭐라고 적었는지에 의존하지 않는다.
+    """
     submissions = load_submissions()
     recent = submissions.get("filings", {}).get("recent", {})
     if not recent:
-        return pd.DataFrame(columns=["filed", "report", "form", "group", "title", "url"])
+        return pd.DataFrame(columns=["filed", "report", "form", "group", "title", "items", "url"])
 
     frame = pd.DataFrame({
         "filed": pd.to_datetime(recent.get("filingDate"), errors="coerce"),
@@ -187,6 +191,7 @@ def load_filings(limit: int = 300) -> pd.DataFrame:
         "title": recent.get("primaryDocDescription"),
         "accn": recent.get("accessionNumber"),
         "doc": recent.get("primaryDocument"),
+        "items": recent.get("items") or "",
     })
     frame["group"] = frame["form"].map(form_group)
     frame["url"] = [

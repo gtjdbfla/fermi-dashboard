@@ -28,12 +28,12 @@ STALE_AFTER = {
 
 # 탭마다 어떤 데이터를 쓰는지. 화면 상단에 그 탭 것만 짧게 보여준다.
 TAB_SOURCES = {
-    "contract": ["수동 데이터(계약·용량)", "공시 피드"],
+    "contract": ["수동 데이터(계약·용량)", "공시 피드", "계약 알림(텔레그램)"],
     "cashflow": ["페르미 재무제표(XBRL)", "수동 데이터(계약·용량)"],
     "roadmap": ["페르미 재무제표(XBRL)", "수동 데이터(계약·용량)", "공시 피드"],
     "sector": ["섹터 표본 13개사", "섹터 시가총액"],
     "flow": ["AI 인프라 바스켓", "공매도·기관·내부자", "주가"],
-    "news": ["뉴스·커뮤니티", "AI 정리"],
+    "news": ["뉴스·커뮤니티", "AI 정리", "계약 알림(텔레그램)"],
     "reference": ["페르미 재무제표(XBRL)", "공시 피드", "주가"],
     "raw": ["페르미 재무제표(XBRL)"],
 }
@@ -92,6 +92,23 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
     add("AI 인프라 바스켓", None, dc.age_seconds("basket", "frame.json"), "크론 하루 2회(원본 일봉)")
     add("공매도·기관·내부자", None, dc.age_seconds("supply", "json"), "크론 하루 2회(공시 격주·분기)")
     add("섹터 시가총액", None, dc.age_seconds("market_caps", "json"), "크론 하루 2회")
+
+    # 알림은 '언제 받아왔나'가 아니라 '감시가 살아 있나'를 봐야 한다. 조용히 죽으면
+    # 아무 일도 안 일어난 것과 구분이 안 된다.
+    import alerts
+    state = alerts.status()
+    if not state["configured"]:
+        records.append({"데이터": "계약 알림(텔레그램)", "최신 시점": "–", "경과": "꺼짐",
+                        "갱신 주기": "크론 30분", "상태": "· 미설정"})
+    else:
+        last = state.get("last_sent")
+        records.append({
+            "데이터": "계약 알림(텔레그램)",
+            "최신 시점": str(pd.Timestamp(last).date()) if last else "발송 없음",
+            "경과": _ago(state.get("age")),
+            "갱신 주기": f"크론 30분 · 감시 {state['watching']}건",
+            "상태": "⚠️ 지연" if (state.get("age") or 0) > 5400 else "✅",
+        })
 
     # 손으로 고치는 계층 — 파일 시각이 아니라 '무엇까지 반영했는가'가 기준이다.
     add("수동 데이터(계약·용량)",

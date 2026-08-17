@@ -12,6 +12,7 @@ AI 정리는 기사 지문이 바뀔 때만 새로 만든다. 뉴스가 그대�
 import sys
 
 import ai_review
+import alerts
 import news
 
 
@@ -42,7 +43,15 @@ def warm_market() -> None:
             print(f"[warn] {label} 갱신 실패: {type(error).__name__}: {error}")
 
 
-def warm_filings() -> None:
+def metrics():
+    """확정 수치 한 벌. 공시 판독·알림·AI 정리가 같은 전제를 쓰게 한 곳에서 만든다."""
+    import fundamentals as fd
+    import market
+    import sec_edgar as sec
+    return raw(fd.compute)(raw(sec.load_company_facts)(), raw(market.load_price)("FRMI")[1])
+
+
+def warm_filings(m) -> None:
     """새 SEC 공시를 AI로 판독해 캐시에 남긴다.
 
     주 1회 클라우드 루틴에 맡겼던 일인데, 그쪽 샌드박스가 SEC 도메인을 egress 차단해서
@@ -50,10 +59,7 @@ def warm_filings() -> None:
     """
     try:
         import fundamentals as fd
-        import market
-        import sec_edgar as sec
         import filing_review as fr
-        m = raw(fd.compute)(raw(sec.load_company_facts)(), raw(market.load_price)("FRMI")[1])
         result = fr.run(m, fd.manual_data_asof())
         if result.get("error"):
             print(f"[warn] 공시 판독 실패: {result['error']}")
@@ -66,6 +72,35 @@ def warm_filings() -> None:
         print(f"[warn] 공시 판독 실패: {type(error).__name__}: {error}")
 
 
+def notify(m, articles) -> None:
+    """새 계약 신호가 있으면 텔레그램으로 보낸다.
+
+    커버리지 15%를 바꾸는 사건은 새 리스뿐이고, 그건 8-K Item 1.01로 들어온다. 화면을
+    열어야 알 수 있으면 늦으므로 여기서 밀어낸다. 알림이 실패해도 나머지 작업은 계속한다.
+    """
+    if m is None:
+        print("[skip] 확정 수치 없음 — 알림 건너뜀")
+        return
+    if not alerts.configured():
+        print("[skip] TELEGRAM_BOT_TOKEN/CHAT_ID 없음 — 알림 꺼짐")
+        return
+    try:
+        import filing_review as fr
+        import sec_edgar as sec
+        result = alerts.check(m, articles, raw(sec.load_filings)(), read_text=fr._text)
+    except Exception as error:
+        print(f"[warn] 알림 실패: {type(error).__name__}: {error}")
+        return
+    if result.get("seeded"):
+        print(f"[ok] 알림 기준선 설정 — 기존 {result['skipped']}건은 보내지 않는다")
+    elif result["sent"]:
+        print(f"[ALERT] {result['sent']}건 발송")
+    else:
+        print(f"[ok] 신규 계약 신호 없음 (감시 {result['skipped']}건)")
+    if result.get("error"):
+        print(f"[warn] 알림 전송 오류: {result['error']}")
+
+
 def main(include_market: bool = False) -> int:
     """빠른층은 기본, 느린층(시세·수급·시총)은 --slow일 때만.
 
@@ -75,7 +110,16 @@ def main(include_market: bool = False) -> int:
     """
     if include_market:
         warm_market()
-    warm_filings()
+
+    try:
+        m = metrics()
+    except Exception as error:
+        # 확정 수치가 없으면 알림도 AI 정리도 틀린 전제로 나간다. 뉴스 저장까지만 하고 끝낸다.
+        print(f"[fail] 확정 수치를 못 읽었다({type(error).__name__}: {error})")
+        m = None
+
+    if m is not None:
+        warm_filings(m)
     articles = raw(news.collect)()
     chatter = raw(news.community)()
     if articles.empty:
@@ -89,6 +133,8 @@ def main(include_market: bool = False) -> int:
     hits = len(news.contract_hits(articles))
     print(f"[ok] 기사 {len(articles)}건(계약·테넌트 {hits}건) · 커뮤니티 {len(chatter)}건 저장")
 
+    notify(m, articles)
+
     key = ai_review.fingerprint(articles, chatter)
     if ai_review._read_cache().get(key):
         print(f"[skip] AI 정리 이미 있음 (지문 {key})")
@@ -97,16 +143,11 @@ def main(include_market: bool = False) -> int:
         print("[skip] GEMINI_API_KEY 없음 — AI 정리 건너뜀")
         return 0
 
-    try:
-        import fundamentals as fd
-        import market
-        import sec_edgar as sec
-        m = raw(fd.compute)(raw(sec.load_company_facts)(), raw(market.load_price)("FRMI")[1])
-        facts = ai_review.context(m)
-    except Exception as error:
+    if m is None:
         # 확정 사실 없이 만든 정리는 전제가 틀려 쓸모가 없다. 다음 실행에서 다시 시도한다.
-        print(f"[fail] 확정 사실을 못 읽었다({type(error).__name__}: {error}) — AI 정리를 건너뛴다")
+        print("[fail] 확정 수치가 없어 AI 정리를 건너뛴다")
         return 1
+    facts = ai_review.context(m)
 
     text, error = raw(ai_review.analyze)(key, ai_review._payload(articles, chatter), facts)
     if text:
@@ -116,5 +157,21 @@ def main(include_market: bool = False) -> int:
     return 1
 
 
+def alert_test() -> int:
+    """python refresh_news.py --test-alert — 텔레그램이 실제로 도착하는지 확인한다."""
+    import sec_edgar as sec
+    if not alerts.configured():
+        print("[fail] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID가 .env에 없다")
+        return 1
+    error = alerts.self_test(metrics(), raw(sec.load_filings)(), news.cached_articles())
+    if error:
+        print(f"[fail] 전송 실패: {error}")
+        return 1
+    print("[ok] 테스트 메시지 발송 — 텔레그램을 확인해라")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--test-alert" in sys.argv:
+        sys.exit(alert_test())
     sys.exit(main(include_market="--slow" in sys.argv))
