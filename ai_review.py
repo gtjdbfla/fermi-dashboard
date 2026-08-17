@@ -25,7 +25,7 @@ MAX_POSTS = 20
 # 무료 티어 하루 20회를 지키기 위한 최소 호출 간격. 2시간이면 하루 최대 12회라
 # 공시 판독(새 8-K가 있을 때만 부른다) 몫이 남는다.
 RATE_CACHE = "ai_rate"
-MIN_INTERVAL = float(os.environ.get("GEMINI_MIN_INTERVAL", 7200))
+MIN_INTERVAL = float(os.environ.get("GEMINI_MIN_INTERVAL", 10800))
 
 # 결과를 디스크에도 남긴다. st.cache_data는 프로세스 메모리라 컨테이너를 다시 세우면 날아가고,
 # 그러면 배포할 때마다 첫 접속자가 API 응답을 기다린다. data/는 볼륨이라 재기동을 견딘다.
@@ -138,15 +138,23 @@ def _prompt(payload: str, facts: dict) -> str:
 - **투자 판단·매수매도 권유·목표주가를 쓰지 마라.**"""
 
 
-def _too_soon() -> float:
+def _too_soon(cache: str = RATE_CACHE) -> float:
     """마지막 호출 이후 남은 대기 시간(초). 0이면 불러도 된다.
 
     무료 티어는 하루 20회다. 크론은 30분마다 도는데 구글 뉴스 목록이 조금만 바뀌어도
     지문이 달라져서, 그대로 두면 하루 20회를 넘기고 429가 난다(2026-08-17 실측).
     지문 변화와 별개로 최소 간격을 강제한다.
+
+    **용도별로 다른 cache 이름을 쓴다.** 뉴스 정리와 애널리스트 정리가 한 슬롯을 공유하면
+    먼저 도는 쪽이 나머지를 굶긴다. 실제로 그렇게 만들었다가 애널리스트 정리가 매번
+    건너뛰어졌다. 각각 3시간이면 둘을 합쳐도 하루 16회로 한도 안이다.
     """
-    age = dc.age_seconds(RATE_CACHE)
+    age = dc.age_seconds(cache)
     return 0.0 if age is None else max(0.0, MIN_INTERVAL - age)
+
+
+def _mark(cache: str = RATE_CACHE) -> None:
+    dc.save_json(cache, {"at": pd.Timestamp.now(tz="UTC").isoformat()})
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -160,7 +168,7 @@ def analyze(fingerprint_key: str, payload: str, facts: dict) -> tuple[str, str]:
     wait = _too_soon()
     if wait:
         return "", f"호출 간격 제한 — {wait/60:.0f}분 뒤 재시도 (무료 한도 하루 20회)"
-    dc.save_json(RATE_CACHE, {"at": pd.Timestamp.now(tz="UTC").isoformat()})
+    _mark()
     try:
         from google import genai
         client = genai.Client()

@@ -34,6 +34,7 @@ TICKER = "FRMI"
 CONSENSUS_CACHE = "analyst_consensus"
 HEADLINE_CACHE = "analyst_headlines"
 REVIEW_CACHE = "analyst_review"
+RATE_CACHE = "analyst_rate"    # 뉴스 정리와 별도 예산
 CONSENSUS_MAX_AGE = 46800      # 느린층(하루 2회)을 견디게
 HEADLINE_MAX_AGE = 5400        # 빠른층(30분)
 REVIEW_MAX_AGE = 86400 * 14
@@ -304,11 +305,12 @@ def review(key: str, text_payload: str, facts: dict, force: bool = False) -> tup
     if not os.environ.get("GEMINI_API_KEY"):
         return "", "GEMINI_API_KEY가 설정되지 않았다."
 
+    # 뉴스 정리와 슬롯을 나눠 쓴다. 같은 키를 쓰면 먼저 도는 쪽이 이쪽을 굶긴다.
     import ai_review
-    wait = ai_review._too_soon()
+    wait = ai_review._too_soon(RATE_CACHE)
     if wait:
         return cached.get("text", ""), f"호출 간격 제한 — {wait/60:.0f}분 뒤 재시도"
-    dc.save_json(ai_review.RATE_CACHE, {"at": pd.Timestamp.now(tz="UTC").isoformat()})
+    ai_review._mark(RATE_CACHE)
     try:
         from google import genai
         client = genai.Client()
