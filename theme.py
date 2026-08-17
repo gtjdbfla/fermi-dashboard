@@ -1,66 +1,94 @@
 """차트 팔레트와 공통 Plotly 레이아웃.
 
-라이트 서피스(#fcfcfb) 기준으로 검증한 값이다(대비 검사에서 aqua/yellow/magenta가 3:1 미만이라
-막대에는 항상 직접 레이블을 붙이고 각 차트 아래에 표를 함께 둔다). 앱 테마를 라이트로 고정한 이유도
-이것으로, .streamlit/config.toml에서 배경색을 같은 값으로 맞춰 두었다.
+라이트/다크 두 벌을 둔다. 다크는 라이트를 자동으로 뒤집은 것이 아니라, 어두운 서피스(#1a1a19)
+기준으로 색각 이상 분리도와 대비를 따로 확인한 값이다. 색을 그대로 두고 배경만 바꾸면
+어두운 화면에서 파랑·보라 계열이 서로 뭉개진다.
+
+두 모드 모두 aqua·yellow·magenta 계열은 배경 대비가 3:1 미만이라, 모든 막대에 값 레이블을
+붙이고 차트마다 같은 값을 읽을 수 있는 표를 함께 둔다.
 """
 
-SURFACE = "#fcfcfb"
-INK_PRIMARY = "#0b0b0b"
-INK_SECONDARY = "#52514e"
-INK_MUTED = "#898781"
-GRID = "#e1e0d9"
-BASELINE = "#c3c2b7"
+import streamlit as st
 
-# 카테고리 슬롯(고정 순서, 순환 금지)
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
-
-# 상태색(시리즈 색과 절대 섞어 쓰지 않는다). 라이트 서피스에서 warning/serious는
-# 대비가 3:1 미만이라 반드시 아이콘+문구와 함께 쓴다.
-STATUS = {
-    "good": "#0ca30c",
-    "warning": "#fab219",
-    "serious": "#ec835a",
-    "critical": "#d03b3b",
+LIGHT = {
+    "surface": "#fcfcfb",
+    "ink": "#0b0b0b",
+    "ink_soft": "#52514e",
+    "ink_muted": "#898781",
+    "grid": "#e1e0d9",
+    "baseline": "#c3c2b7",
+    "series": ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"],
+    # 순서형 램프. 라이트에서는 250단계(#86b6ef)보다 밝게 가면 배경에 묻힌다.
+    "ordinal": ["#86b6ef", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#1c5cab", "#184f95"],
 }
+
+DARK = {
+    "surface": "#1a1a19",
+    "ink": "#ffffff",
+    "ink_soft": "#c3c2b7",
+    "ink_muted": "#898781",
+    "grid": "#2c2c2a",
+    "baseline": "#383835",
+    "series": ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300"],
+    # 다크에서는 반대로 600단계(#184f95)보다 어두우면 배경에 묻힌다.
+    "ordinal": ["#184f95", "#1c5cab", "#256abf", "#2a78d6", "#3987e5", "#5598e7", "#6da7ec", "#86b6ef"],
+}
+
+# 상태색은 두 모드에서 같은 값을 쓴다. 네 개 모두 다크 서피스에서 3:1을 넘고,
+# 라이트에서 warning/serious가 3:1 미만인 것은 아이콘+문구로 보완한다.
+STATUS = {"good": "#0ca30c", "warning": "#fab219", "serious": "#ec835a", "critical": "#d03b3b"}
 STATUS_ICON = {"good": "🟢", "warning": "🟡", "serious": "🟠", "critical": "🔴", "info": "⚪"}
 STATUS_TEXT = {"good": "양호", "warning": "관찰", "serious": "주의", "critical": "경고", "info": "판정보류"}
-
-# 순서형 램프(파랑 단일 색조). 라이트에서는 250단계보다 밝게 가지 않는다.
-ORDINAL_BLUE = ["#86b6ef", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#1c5cab", "#184f95"]
 
 FONT_FAMILY = 'system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif'
 
 
+def palette() -> dict:
+    """지금 화면이 쓰는 팔레트. 사용자가 우측 상단 메뉴에서 테마를 바꾸면 따라간다."""
+    try:
+        mode = st.context.theme.type
+    except Exception:
+        mode = "light"
+    return DARK if mode == "dark" else LIGHT
+
+
+# 아래 이름들은 palette()를 거치지 않고 쓰던 자리를 위해 남긴다(모듈 임포트 시점 고정값).
+def __getattr__(name: str):
+    mapping = {"SURFACE": "surface", "INK_PRIMARY": "ink", "INK_SECONDARY": "ink_soft",
+               "INK_MUTED": "ink_muted", "GRID": "grid", "BASELINE": "baseline",
+               "SERIES": "series", "ORDINAL_BLUE": "ordinal"}
+    if name in mapping:
+        return palette()[mapping[name]]
+    raise AttributeError(name)
+
+
 def ordinal_colors(count: int) -> list[str]:
-    """단계 수에 맞춰 램프를 균등 샘플링한다. 어두울수록 확정도가 높은 단계에 쓴다."""
+    """단계 수에 맞춰 램프를 균등 샘플링한다. 진한 쪽이 확정도가 높은 단계다."""
+    ramp = palette()["ordinal"]
     if count <= 1:
-        return [ORDINAL_BLUE[-1]]
-    last = len(ORDINAL_BLUE) - 1
-    return [ORDINAL_BLUE[round(index * last / (count - 1))] for index in range(count)]
+        return [ramp[-1]]
+    last = len(ramp) - 1
+    return [ramp[round(index * last / (count - 1))] for index in range(count)]
 
 
 def style(figure, height: int = 320, legend: bool = False, ygrid: bool = True):
     """모든 차트에 같은 크롬을 입힌다. 격자·축은 뒤로 물리고 데이터가 앞에 오게 한다."""
+    colors = palette()
     figure.update_layout(
         height=height,
-        template="plotly_white",
-        paper_bgcolor=SURFACE,
-        plot_bgcolor=SURFACE,
-        font=dict(family=FONT_FAMILY, size=12, color=INK_SECONDARY),
+        template="plotly_dark" if colors is DARK else "plotly_white",
+        paper_bgcolor=colors["surface"],
+        plot_bgcolor=colors["surface"],
+        font=dict(family=FONT_FAMILY, size=12, color=colors["ink_soft"]),
         margin=dict(l=8, r=8, t=28, b=8),
         hoverlabel=dict(font_family=FONT_FAMILY, font_size=12),
         showlegend=legend,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, title_text=""),
         bargap=0.35,
     )
-    figure.update_xaxes(showgrid=False, linecolor=BASELINE, tickfont=dict(color=INK_MUTED), title_text="")
-    figure.update_yaxes(
-        showgrid=ygrid,
-        gridcolor=GRID,
-        zerolinecolor=BASELINE,
-        linecolor="rgba(0,0,0,0)",
-        tickfont=dict(color=INK_MUTED),
-        title_text="",
-    )
+    figure.update_xaxes(showgrid=False, linecolor=colors["baseline"],
+                        tickfont=dict(color=colors["ink_muted"]), title_text="")
+    figure.update_yaxes(showgrid=ygrid, gridcolor=colors["grid"], zerolinecolor=colors["baseline"],
+                        linecolor="rgba(0,0,0,0)", tickfont=dict(color=colors["ink_muted"]),
+                        title_text="")
     return figure

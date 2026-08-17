@@ -3,8 +3,11 @@
 화면 구조는 검증 결과를 그대로 따른다. 전력·에너지 인프라 13개사로 항목별 판별력을 검증했더니
 처음 세웠던 7개 축 중 3개는 생존/붕괴를 가르지 못했다(sector.py, data/axis_validation.csv).
 
-  핵심 — 계약 커버리지 · 현금흐름 전환   ← 검증을 통과했다. 맨 위에 크게 둔다.
-  참고 — 런웨이 · 이자 자본화 · 희석 · 지배구조 · 밸류에이션  ← 판정에서 내리고 접어 둔다.
+  핵심 — 계약 커버리지 · 현금흐름 전환
+  참고 — 런웨이 · 이자 자본화 · 희석 · 지배구조 · 밸류에이션 (판정에서 내림)
+
+**화면에는 숫자만 두고 설명은 제목 옆 ? 뒤에 넣는다.** 설명이 길게 깔려 있으면 정작 봐야 할
+수치가 묻힌다. 근거를 지우지는 않되 눌러야 보이게 한다.
 """
 
 import pandas as pd
@@ -27,19 +30,52 @@ st.markdown(
     """
     <style>
       div[data-testid="stMetricValue"] { font-size: 1.4rem; }
-      div[data-testid="stMetricLabel"] { color: #52514e; }
       section.main > div { padding-top: 1rem; }
+      /* 제목 옆 물음표 칸은 아이콘 크기만큼만 차지하게 한다 */
+      div[class*="st-key-help_"] div[data-testid="stHorizontalBlock"] { gap: .25rem; }
+      div[class*="st-key-help_"] button { padding: 0 .3rem; min-height: 1.6rem; }
+      div[class*="st-key-help_"] p { margin-bottom: 0; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+_help_ids = {}
+
+
+def heading(title: str, help_text: str = "", size: str = "#####"):
+    """제목 옆 물음표. 눌렀을 때만 설명이 열린다.
+
+    st.markdown(help=...) 툴팁은 마우스를 올려야 열려 모바일에서 쓰기 어렵다.
+    """
+    if not help_text:
+        st.markdown(f"{size} {title}")
+        return
+    key = f"help_{len(_help_ids)}"
+    _help_ids[key] = title
+    with st.container(key=key):
+        left, right = st.columns([0.92, 0.08], vertical_alignment="center")
+        left.markdown(f"{size} {title}")
+        with right.popover("", icon=":material/help:"):
+            st.markdown(help_text)
+
+
+def note(help_text: str, label: str = "설명"):
+    """제목이 없는 자리에 설명만 접어 두는 경우."""
+    key = f"help_{len(_help_ids)}"
+    _help_ids[key] = label
+    with st.container(key=key):
+        with st.popover(label, icon=":material/help:"):
+            st.markdown(help_text)
+
 
 # ── 렌더 헬퍼 ─────────────────────────────────────────────────────────────────
-def bar(frame, x, y, color, unit="M$", digits=0, height=300, horizontal=False, colors=None):
-    """막대 하나짜리 차트. 팔레트 대비가 3:1 미만인 색이 있어 항상 값 레이블을 붙인다."""
+def bar(frame, x, y, color=None, unit="M$", digits=0, height=300, horizontal=False, colors=None,
+        key=None):
+    palette = th.palette()
     figure = go.Figure()
-    marker = dict(color=colors if colors is not None else color, line=dict(color=th.SURFACE, width=2))
+    marker = dict(color=colors if colors is not None else (color or palette["series"][0]),
+                  line=dict(color=palette["surface"], width=2))
     text = [f"{value:,.{digits}f}" for value in frame[y]]
     if horizontal:
         figure.add_bar(y=frame[x], x=frame[y], orientation="h", marker=marker, text=text,
@@ -47,35 +83,39 @@ def bar(frame, x, y, color, unit="M$", digits=0, height=300, horizontal=False, c
                        hovertemplate="%{y}<br>%{x:,.1f} " + unit + "<extra></extra>")
         figure.update_yaxes(autorange="reversed")
         th.style(figure, height=height, ygrid=False)
-        figure.update_xaxes(showgrid=True, gridcolor=th.GRID)
+        figure.update_xaxes(showgrid=True, gridcolor=palette["grid"])
     else:
         figure.add_bar(x=frame[x], y=frame[y], marker=marker, text=text,
                        textposition="outside", cliponaxis=False,
                        hovertemplate="%{x}<br>%{y:,.1f} " + unit + "<extra></extra>")
         th.style(figure, height=height)
-    figure.update_traces(marker_cornerradius=4, textfont=dict(color=th.INK_SECONDARY, size=11))
+    figure.update_traces(marker_cornerradius=4,
+                         textfont=dict(color=palette["ink_soft"], size=11))
     return figure
 
 
 def grouped_bar(frame, x, series, unit="M$", height=320, stacked=False):
-    """같은 단위의 계열 2~3개. 이중 축은 쓰지 않는다."""
+    palette = th.palette()
     figure = go.Figure()
     for index, (column, name) in enumerate(series):
+        # 쌓은 막대에서는 작은 조각의 숫자가 잘려 오히려 읽기 어렵다. 값은 표로 읽는다.
         labels = None if stacked else [f"{value:,.0f}" for value in frame[column]]
         figure.add_bar(x=frame[x], y=frame[column], name=name,
-                       marker=dict(color=th.SERIES[index], line=dict(color=th.SURFACE, width=2)),
+                       marker=dict(color=palette["series"][index],
+                                   line=dict(color=palette["surface"], width=2)),
                        text=labels, textposition="outside", cliponaxis=False,
                        hovertemplate="%{x} · " + name + "<br>%{y:,.0f} " + unit + "<extra></extra>")
     th.style(figure, height=height, legend=True)
     figure.update_layout(barmode="stack" if stacked else "group")
-    figure.update_traces(marker_cornerradius=4, textfont=dict(color=th.INK_SECONDARY, size=11))
+    figure.update_traces(marker_cornerradius=4, textfont=dict(color=palette["ink_soft"], size=11))
     return figure
 
 
 def line(frame, x, y, name, unit="", height=300):
+    palette = th.palette()
     figure = go.Figure()
     figure.add_scatter(x=frame[x], y=frame[y], mode="lines", name=name,
-                       line=dict(color=th.SERIES[0], width=2),
+                       line=dict(color=palette["series"][0], width=2),
                        hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.2f} " + unit + "<extra></extra>")
     th.style(figure, height=height)
     figure.update_layout(hovermode="x unified")
@@ -83,11 +123,12 @@ def line(frame, x, y, name, unit="", height=300):
 
 
 def compare_line(frame, x, series, unit="", height=320):
-    """같은 축의 계열 2개를 겹쳐 그린다. 이중 축은 쓰지 않는다."""
+    palette = th.palette()
     figure = go.Figure()
     for index, (column, name) in enumerate(series):
         figure.add_scatter(x=frame[x], y=frame[column], mode="lines", name=name,
-                           line=dict(color=th.SERIES[index], width=2.5 if index == 0 else 2,
+                           line=dict(color=palette["series"][index],
+                                     width=2.5 if index == 0 else 2,
                                      dash="solid" if index == 0 else "dot"),
                            hovertemplate="%{x|%Y-%m-%d} · " + name + "<br>%{y:,.1f} " + unit
                                          + "<extra></extra>")
@@ -97,7 +138,6 @@ def compare_line(frame, x, series, unit="", height=320):
 
 
 def table(frame, **kwargs):
-    """대비가 낮은 팔레트를 쓰는 만큼 차트 옆에는 같은 값을 읽을 수 있는 표를 둔다."""
     st.dataframe(frame, use_container_width=True, hide_index=True, **kwargs)
 
 
@@ -107,75 +147,58 @@ def metric_row(items):
 
 
 # ── 데이터 ────────────────────────────────────────────────────────────────────
-with st.spinner("SEC EDGAR · 시세 불러오는 중..."):
+with st.spinner("불러오는 중..."):
     try:
         facts = sec.load_company_facts()
     except Exception as error:
-        st.error(f"SEC EDGAR 접속 실패: {error}\n\n"
-                 "SEC는 연락처가 담긴 User-Agent를 요구한다. 환경변수 SEC_USER_AGENT를 확인하세요.")
+        st.error(f"SEC EDGAR 접속 실패: {error}\n\n환경변수 SEC_USER_AGENT를 확인하세요.")
         st.stop()
     price_frame, price_meta = market.load_price(sec.TICKER)
     m = fd.compute(facts, price_meta)
 
 if sec.USER_AGENT_IS_PLACEHOLDER:
-    st.warning(
-        "환경변수 `SEC_USER_AGENT`가 설정되지 않아 자리표시자를 쓰고 있습니다. SEC는 연락 가능한 "
-        "이메일이 담긴 User-Agent를 요구하며, 자리표시자로는 곧 차단될 수 있습니다. `.env`를 확인하세요.",
-        icon="⚠️",
-    )
+    st.warning("`SEC_USER_AGENT` 미설정 — 자리표시자로 동작 중이며 곧 차단될 수 있다.", icon="⚠️")
 
 profile = sec.company_profile()
 
 # ── 헤더 ──────────────────────────────────────────────────────────────────────
-head_left, head_right = st.columns([0.58, 0.42])
+head_left, head_right = st.columns([0.55, 0.45])
 with head_left:
-    st.title("⚡ 페르미 펀더멘탈 점검")
+    st.title("⚡ 페르미 펀더멘탈")
     st.caption(f"{profile.get('name') or sec.COMPANY_KO} · {sec.EXCHANGE}: {sec.TICKER} · "
-               f"{profile.get('sic', '')} · CIK {int(sec.CIK)}")
+               f"CIK {int(sec.CIK)}")
 with head_right:
     metric_row([
         ("주가", f"${m['price']:,.2f}" if m.get("price") else "–", "Yahoo Finance 지연 시세"),
         ("시가총액", fd.usd(m.get("market_cap")), "주가 × 최근 보고 발행주식수"),
-        ("최신 재무 기준일", str(pd.Timestamp(m["asof"]).date()) if m.get("asof") is not None else "–",
+        ("재무 기준일", str(pd.Timestamp(m["asof"]).date()) if m.get("asof") is not None else "–",
          f"출처: {m.get('asof_source', '–')}"),
     ])
 
-# ── 수동 데이터 노후화 경보 ───────────────────────────────────────────────────
-# 핵심 판정 ①(계약 커버리지)의 분자·분모가 전부 수동 CSV라, 새 공시가 올라와도 화면은 옛 숫자를
-# 그대로 보여준다. 공시 피드는 30분마다 자동으로 받고 있으니 CSV 근거일과 비교해 먼저 알린다.
+# ── 수동 데이터 노후화 ────────────────────────────────────────────────────────
 stale = fd.staleness(m)
 if stale["count"] > 0:
-    with st.container(border=True):
-        st.warning(
-            f"**수동 데이터가 낡았을 수 있습니다.** 마지막 갱신 근거일"
-            f"({pd.Timestamp(stale['asof']).date()}) 이후 새 공시 {stale['count']}건이 올라왔습니다. "
-            "계약 MW·전력 용량·자금조달 수치는 자동 갱신되지 않습니다.",
-            icon="🔔",
-        )
-        feed = stale["filings"].copy()
-        feed["접수일"] = feed["filed"].dt.date
-        table(
-            feed.rename(columns={"form": "종류", "group": "구분", "title": "제목", "url": "링크"})
-            [["접수일", "종류", "구분", "제목", "링크"]],
-            column_config={"링크": st.column_config.LinkColumn("링크", display_text="열기")},
-        )
-        st.caption(
-            "`data/`의 CSV를 고치면 재빌드 없이 반영됩니다. 읽어보고 바꿀 것이 없다면 "
-            "`data/review_log.csv`에 검토 완료 지점을 남기면 이 배너가 꺼집니다."
-        )
+    st.warning(f"**수동 데이터가 낡았을 수 있다** — {pd.Timestamp(stale['asof']).date()} 이후 "
+               f"새 공시 {stale['count']}건.", icon="🔔")
+    feed = stale["filings"].copy()
+    feed["접수일"] = feed["filed"].dt.date
+    table(feed.rename(columns={"form": "종류", "title": "제목", "url": "링크"})
+          [["접수일", "종류", "제목", "링크"]],
+          column_config={"링크": st.column_config.LinkColumn("링크", display_text="열기")})
 else:
     reviews = fd.load_csv("review_log.csv")
-    last_note = reviews.iloc[-1] if not reviews.empty else None
-    st.caption(
-        f"✅ 수동 데이터는 {pd.Timestamp(stale['asof']).date()}까지 반영됨"
-        + (f" · 마지막 검토: {last_note['verdict']} — {last_note['note']}" if last_note is not None else "")
-    )
+    last = reviews.iloc[-1] if not reviews.empty else None
+    st.caption(f"✅ 수동 데이터 {pd.Timestamp(stale['asof']).date()}까지 반영"
+               + (f" · {last['verdict']}" if last is not None else ""))
 
 # ── 핵심 판정 ─────────────────────────────────────────────────────────────────
-st.subheader("핵심 판정")
-st.caption(
-    "전력·에너지 인프라 13개사로 검증했을 때 생존과 붕괴를 실제로 가른 지표만 남겼다. "
-    "판별력이 없던 항목은 아래 **참고 지표** 탭으로 내렸다. 정보 정리 목적의 도구이며 투자 권유가 아니다."
+heading(
+    "핵심 판정", size="####",
+    help_text=(
+        "전력·에너지 인프라 13개사로 검증해 **실제로 생존과 붕괴를 가른 지표만** 남겼다. "
+        "판별력이 없던 항목(런웨이·이자 자본화·희석)은 **참고 지표** 탭으로 내렸다.\n\n"
+        "정보 정리 목적이며 투자 권유가 아니다."
+    ),
 )
 for column, item in zip(st.columns(3), sc.fermi_position(m)):
     with column.container(border=True):
@@ -183,36 +206,36 @@ for column, item in zip(st.columns(3), sc.fermi_position(m)):
         st.markdown(f"### {item['value']}")
         st.markdown(f"{th.STATUS_ICON[item['status']]} **{item['verdict']}**")
         if item["detail"]:
-            st.caption(item["detail"])
+            with st.popover("근거", icon=":material/help:"):
+                st.markdown(item["detail"])
 
 tabs = st.tabs(["① 계약 커버리지", "② 현금흐름 전환", "③ 로드맵", "④ 섹터 검증", "⑤ 시장·수급",
                 "⑥ 뉴스·소문", "참고 지표", "원본 데이터"])
 
 # ── ① 계약 커버리지 ───────────────────────────────────────────────────────────
 with tabs[0]:
-    st.markdown("#### 지을 용량을 사 줄 고객이 계약돼 있는가")
-    st.caption(
-        "검증에서 가장 깨끗하게 갈린 지표다. 유지 그룹 6곳은 전부 장기 take-or-pay로 부채 만기를 덮었고, "
-        "붕괴 4곳은 계약이 없거나(Tellurian) 만기가 어긋났다(New Fortress)."
-    )
+    heading("지을 용량을 사 줄 고객이 계약돼 있는가", size="####", help_text=(
+        "검증에서 가장 깨끗하게 갈린 지표다. 유지 그룹 6곳은 전부 장기 take-or-pay로 부채 만기를 "
+        "덮었고, 붕괴 4곳은 계약이 없거나(Tellurian) 만기가 어긋났다(New Fortress)."))
     metric_row([
         ("구속력 있는 계약", fd.num(m.get("mw_contracted"), 0, " MW"), "서명 완료된 리스 기준"),
         ("반입 설비 대비", fd.pct(m.get("contracted_vs_landed")), "확보한 설비 중 팔린 비중"),
         ("장기 목표 대비", fd.pct(m.get("contracted_vs_target")), "17GW 목표 대비 실체"),
-        ("고객 수", fd.num(m.get("customer_count"), 0, "개사"), "집중도가 100%면 단일 계약 리스크 노출"),
+        ("고객 수", fd.num(m.get("customer_count"), 0, "개사"), "집중도 100%면 단일 계약 리스크"),
     ])
     metric_row([
-        ("계약 총액", fd.usd((m.get("backlog_musd") or 0) * 1e6), "계약 기간 전체 합산 예상 매출"),
+        ("계약 총액", fd.usd((m.get("backlog_musd") or 0) * 1e6), "계약 기간 전체 합산"),
         ("옵션 포함 최대", fd.num(m.get("mw_contracted_option"), 0, " MW"), "확장옵션 전량 행사 가정"),
-        ("MW·년당 단가", fd.usd(m.get("revenue_per_mw_year")), "계약 총액 ÷ 계약 MW ÷ 계약 연수"),
-        ("계약 총액 ÷ 누적 투입", fd.num(
+        ("MW·년당 단가", fd.usd(m.get("revenue_per_mw_year")), "계약 총액 ÷ MW ÷ 연수"),
+        ("계약 ÷ 누적 투입", fd.num(
             (m.get("backlog_musd") or 0) * 1e6 / m["ppe_gross"] if m.get("ppe_gross") else None, 2, "배"),
-         "쌓은 자산이 계약으로 얼마나 회수되는지"),
+         "쌓은 자산이 계약으로 회수되는 비율"),
     ])
 
     left, right = st.columns(2)
     with left:
-        st.markdown("**섹터 대비 계약 커버리지** (%)")
+        heading("섹터 대비 커버리지 (%)", help_text=(
+            "유지 그룹의 관측 범위는 74~92%다. Tellurian은 0%에서 매각됐다."))
         summary = sc.summary()
         bench = summary.dropna(subset=["coverage"])[["company", "group", "coverage"]].copy()
         coverage_now = (m.get("mw_contracted") or 0) / (m.get("mw_landed") or 1) * 100
@@ -220,68 +243,67 @@ with tabs[0]:
             {"company": "Fermi ← 현재", "group": "대상", "coverage": coverage_now}])])
         bench["라벨"] = bench["company"] + " (" + bench["group"].astype(str) + ")"
         bench = bench.sort_values("coverage", ascending=False)
-        st.plotly_chart(bar(bench, "라벨", "coverage", th.SERIES[0], unit="%", digits=0,
-                            horizontal=True, height=300), use_container_width=True)
-        table(bench[["라벨", "coverage"]].rename(columns={"라벨": "기업", "coverage": "커버리지(%)"}).round(0))
+        st.plotly_chart(bar(bench, "라벨", "coverage", unit="%", digits=0, horizontal=True,
+                            height=280), use_container_width=True)
     with right:
-        st.markdown("**반입 설비의 계약 충족도** (MW)")
-        landed = m.get("mw_landed") or 0
-        contracted = m.get("mw_contracted") or 0
+        heading("반입 설비의 계약 충족도 (MW)")
+        landed, contracted = m.get("mw_landed") or 0, m.get("mw_contracted") or 0
         gap = pd.DataFrame({"구분": ["계약 완료", "미계약"],
                             "MW": [contracted, max(landed - contracted, 0)]})
-        st.plotly_chart(bar(gap, "구분", "MW", th.SERIES[0], unit="MW", horizontal=True, height=180,
-                            colors=[th.SERIES[0], th.ORDINAL_BLUE[0]]), use_container_width=True)
-        st.markdown("**확정도별 전력 용량** (MW · 진할수록 확정)")
+        st.plotly_chart(bar(gap, "구분", "MW", unit="MW", horizontal=True, height=160,
+                            colors=[th.palette()["series"][0], th.palette()["ordinal"][0]]),
+                        use_container_width=True)
+        heading("확정도별 전력 용량 (MW)", help_text=(
+            "색이 진할수록 확정도가 높다. **목표(17GW)와 실제 가동(0MW) 사이 거리가 곧 실행 리스크**이고, "
+            "그 사이 단계들이 예정대로 내려오는지가 점검 대상이다."))
         stages = m["power_stages"].sort_values("order")
-        st.plotly_chart(bar(stages, "stage", "mw", th.SERIES[0], unit="MW", horizontal=True, height=300,
+        st.plotly_chart(bar(stages, "stage", "mw", unit="MW", horizontal=True, height=280,
                             colors=list(reversed(th.ordinal_colors(len(stages))))),
                         use_container_width=True)
 
-    st.markdown("**계약 내역**")
+    heading("계약 내역")
     if not m["contracts"].empty:
         table(m["contracts"].rename(columns={
             "customer": "고객", "signed": "체결일", "binding": "구속력", "phase1_mw": "1단계 MW",
             "option_mw": "옵션 포함 MW", "total_revenue_musd": "계약총액(백만$)", "term_years": "기간(년)",
             "extension": "연장옵션", "delivery_start": "인도 개시", "source": "출처", "note": "비고"}))
-    st.markdown("**확정도별 단계 원본**")
+    heading("확정도별 단계 원본")
     table(stages.rename(columns={"order": "순서", "stage": "단계", "mw": "MW", "certainty": "확정도",
                                  "as_of": "기준일", "source": "출처", "note": "비고"}))
 
 # ── ② 현금흐름 전환 ───────────────────────────────────────────────────────────
 with tabs[1]:
-    st.markdown("#### 가동 후 현금이 실제로 들어오기 시작하는가")
-    st.caption(
+    heading("가동 후 현금이 실제로 들어오기 시작하는가", size="####", help_text=(
         "유지 그룹 6곳은 전부 영업현금흐름 흑자에 도달했고, 붕괴 4곳은 도달하지 못했거나"
-        "(Plug Power·FuelCell) 도달한 뒤 되돌아갔다(New Fortress). 매출의 유무가 아니라 "
-        "**매출이 현금을 만드는가**가 갈랐다 — Core Scientific은 매출 $640M을 내면서 파산했다."
-    )
+        "(Plug Power·FuelCell) 도달한 뒤 되돌아갔다(New Fortress).\n\n"
+        "**매출의 유무가 아니라 매출이 현금을 만드는가**가 갈랐다 — Core Scientific은 매출 $640M을 "
+        "내면서 파산했다."))
     metric_row([
         ("현재 매출", "$0", "pre-revenue 개발단계"),
         ("분기 영업현금흐름", fd.usd(-(m.get("op_burn_q") or 0)), "최근 분기"),
         ("T0 이후 경과", "1년차", "대규모 자본 투입 시작(2025) 기준"),
-        ("첫 상업 전력 목표", "약 200MW", "회사 발표 기준 6개월 내"),
+        ("첫 상업 전력 목표", "약 200MW", "회사 발표 기준"),
     ])
 
     left, right = st.columns(2)
     with left:
-        st.markdown("**페르미 분기 영업현금흐름** (백만 달러)")
+        heading("분기 영업현금흐름 (백만$)", help_text=(
+            "아직 전 분기 적자다. **이 곡선이 0을 넘어 유지되는 시점**이 판별 지점이다."))
         ops = m["op_cf_series"].copy()
         ops["금액"] = ops["val"] / 1e6
-        st.plotly_chart(bar(ops, "label", "금액", th.SERIES[0], digits=1), use_container_width=True)
-        st.caption("아직 전 분기 적자다. 이 곡선이 0을 넘어 유지되는 시점이 판별 지점이다.")
+        st.plotly_chart(bar(ops, "label", "금액", digits=1), use_container_width=True)
     with right:
-        st.markdown("**섹터: T0에서 흑자 전환까지 걸린 연수**")
-        summary = sc.summary()
-        turn = summary.dropna(subset=["years_to_turn"])[["company", "group", "years_to_turn"]].copy()
+        heading("섹터: T0에서 흑자까지 (년)", help_text=(
+            "붕괴 그룹은 이 막대가 아예 없다 — 전환에 도달하지 못했기 때문이다. "
+            "페르미는 T0+1년차라 아직 이 표에 오를 수 없다."))
+        turn = sc.summary().dropna(subset=["years_to_turn"])[["company", "group", "years_to_turn"]].copy()
         turn["라벨"] = turn["company"] + " (" + turn["group"].astype(str) + ")"
-        turn = turn.sort_values("years_to_turn")
         if not turn.empty:
-            st.plotly_chart(bar(turn, "라벨", "years_to_turn", th.SERIES[0], unit="년", digits=0,
-                                horizontal=True, height=280), use_container_width=True)
-        st.caption("붕괴 그룹은 이 막대가 아예 없다 — 전환에 도달하지 못했기 때문이다. "
-                   "페르미는 T0+1년차라 아직 이 표에 오를 수 없다.")
+            st.plotly_chart(bar(turn.sort_values("years_to_turn"), "라벨", "years_to_turn",
+                                unit="년", digits=0, horizontal=True, height=280),
+                            use_container_width=True)
 
-    st.markdown("**마일스톤 이행 현황**")
+    heading("마일스톤 이행 현황")
     milestones = m["milestones"].copy()
     if not milestones.empty:
         milestones["date"] = milestones["date"].dt.date
@@ -290,148 +312,112 @@ with tabs[1]:
 
 # ── ③ 로드맵 ──────────────────────────────────────────────────────────────────
 with tabs[2]:
-    st.markdown("#### 유지 기업들의 길을 가려면 무엇을 언제까지 해야 하는가")
-
     steps = rm.evaluate(m)
     state = rm.progress(steps)
+    heading("유지 기업들의 길을 가려면", size="####", help_text=(
+        "**왜 '유지 기업 평균 소요 시간'이 아닌가.** 뽑으려고 계산했지만 나오지 않았다. "
+        "T0 이전에 이미 매출이 있던 회사가 많아서다 — Cheniere $292M(재기화), Bloom $972M(장비), "
+        "Core Scientific $544M(비트코인). 이들에게 '첫 매출까지'는 음수가 되고 평균은 -0.4년이 된다. "
+        "**페르미처럼 무매출로 시작해 사다리를 끝까지 올라간 표본이 사실상 없다.**\n\n"
+        "그래서 1차 잣대는 회사가 공시에 적은 목표 시점으로 두고, 개별 기업 사례를 옆에 붙인다. "
+        "목표 시점은 회사가 제시한 것이지 제3자가 검증한 것이 아니다. 다만 **자기가 공언한 일정을 "
+        "반복해서 넘기는 것**은 붕괴한 기업들이 공통으로 보인 모습이었다.\n\n"
+        "단계 정의와 목표는 `data/roadmap.csv`에 있다."))
     if state:
         metric_row([
             ("진척", f"{state['done']} / {state['total']} 단계", "달성한 단계 수"),
             ("현재 단계", f"{state['current_step']}. {state['current']}" if state.get("current") else "완료",
-             "앞 단계를 끝내야 다음 단계로 넘어간다"),
-            ("다음 목표 시점",
+             "앞 단계를 끝내야 다음으로 넘어간다"),
+            ("다음 목표",
              str(pd.Timestamp(state["next_target"]).date()) if pd.notna(state.get("next_target")) else "미제시",
              "회사가 공시에 적은 목표"),
-            # days_left 열은 결측이 섞여 float으로 올라온다. 포맷 전에 정수로 되돌린다.
-            ("남은 일수",
-             f"D{int(state['next_days']):+d}" if pd.notna(state.get("next_days")) else "–",
-             "음수면 회사가 공언한 일정을 넘겼다는 뜻"),
+            ("남은 일수", f"D{int(state['next_days']):+d}" if pd.notna(state.get("next_days")) else "–",
+             "음수면 공언한 일정을 넘겼다는 뜻"),
         ])
         if state["overdue"]:
-            st.error(f"**공언한 일정을 넘긴 단계가 {state['overdue']}개 있다.** 아래에서 확인.", icon="⏰")
-
-    st.caption(
-        "**왜 '유지 기업 평균 소요 시간'이 아닌가.** 그걸 뽑으려고 계산해 봤지만 나오지 않았다. "
-        "T0(대규모 자본 투입 개시) 이전에 이미 매출이 있던 회사가 많아서다 — Cheniere는 재기화 "
-        "터미널 매출 $292M, Bloom Energy는 장비 판매 $972M, Core Scientific은 비트코인 $544M이 "
-        "T0 전부터 있었다. 이들에게 '첫 매출까지 걸린 시간'은 음수가 되고, 평균을 내면 -0.4년 같은 "
-        "값이 나온다. **페르미처럼 완전 무매출로 시작해 사다리를 끝까지 올라간 표본이 사실상 없다.** "
-        "그래서 1차 잣대는 회사가 스스로 공시에 적은 목표 시점으로 두고, 개별 기업 사례는 "
-        "'보통 몇 년 걸리는가'의 감각으로만 옆에 붙인다."
-    )
+            st.error(f"공언한 일정을 넘긴 단계 {state['overdue']}개", icon="⏰")
 
     STEP_ICON = {rm.STATUS_DONE: "🟢", rm.STATUS_ACTIVE: "🔵", rm.STATUS_WAITING: "⚪"}
     for row in steps.itertuples():
         with st.container(border=True):
-            head = f"**{STEP_ICON[row.status]} {row.step}단계 · {row.name}** &nbsp;—&nbsp; {row.status}"
+            head = f"**{STEP_ICON[row.status]} {row.step}단계 · {row.name}** — {row.status}"
             if row.overdue:
-                head += " &nbsp;⏰ **일정 초과**"
+                head += " ⏰ **일정 초과**"
             st.markdown(head)
-            st.caption(row.definition)
-
-            left, right = st.columns([0.34, 0.66])
+            left, right = st.columns([0.45, 0.55])
             with left:
                 target_text = "미제시"
                 if pd.notna(row.target):
                     target_text = str(pd.Timestamp(row.target).date())
                     if pd.notna(row.days_left):
-                        target_text += f"  (D{int(row.days_left):+d})"
-                metric_row([("현재", row.display, ""), ("회사 목표", target_text, row.target_source or "")])
+                        target_text += f" (D{int(row.days_left):+d})"
+                metric_row([("현재", row.display, row.definition),
+                            ("회사 목표", target_text, row.target_source or "")])
             with right:
-                st.markdown(f"**참고 사례** — {row.peer_reference}")
-                st.caption(row.note)
-
-    st.info(
-        "**이 화면은 매일 다시 계산된다.** 남은 일수는 오늘 날짜 기준이고, 현재 수치는 SEC XBRL과 "
-        "`data/` CSV에서 매번 새로 읽는다. 계약 MW가 늘거나 첫 전력이 켜지면 단계가 자동으로 넘어간다. "
-        "단계 정의와 목표 시점은 `data/roadmap.csv`에 있고, 회사가 새 일정을 공시하면 그 파일만 고치면 된다.",
-        icon="🔄",
-    )
-    st.warning(
-        "**목표 시점은 회사가 제시한 것이지 제3자가 검증한 것이 아니다.** 개발단계 인프라에서 일정 "
-        "지연은 흔하고, 지연 자체가 곧 실패를 뜻하지도 않는다 — Cheniere도 최종투자결정에서 첫 카고까지 "
-        "4년이 걸렸다. 다만 **자기가 공언한 일정을 반복해서 넘기는 것**은 섹터 검증에서 붕괴한 기업들이 "
-        "공통으로 보인 모습이었다.",
-        icon="⚠️",
-    )
-
+                with st.popover("참고 사례", icon=":material/help:"):
+                    st.markdown(f"{row.peer_reference}\n\n{row.note}")
 
 # ── ④ 섹터 검증 ───────────────────────────────────────────────────────────────
 with tabs[3]:
-    st.markdown("#### 이 항목들이 실제로 결과를 갈랐는가")
-    st.caption(
-        "매출보다 먼저 대규모 인프라를 지은 상장사 13곳. 결과는 주가가 아니라 객관적 재무 사건으로 "
-        "나눴다(주가로 나누면 순환논증이 된다). 그런 다음 항목별 값을 두 그룹에 대조했다."
-    )
-
-    st.markdown("##### 항목별 검증 결과")
+    heading("이 항목들이 실제로 결과를 갈랐는가", size="####", help_text=(
+        "매출보다 먼저 대규모 인프라를 지은 상장사 13곳. 결과는 주가가 아니라 **객관적 재무 사건**으로 "
+        "나눴다(주가로 나누면 순환논증이 된다). 그런 다음 항목별 값을 두 그룹에 대조했다.\n\n"
+        "**처음 세웠던 7개 축 중 3개는 판별력이 없었다.** 런웨이는 유지 9.0개월 vs 붕괴 7.2개월로 "
+        "차이가 없었고(Cheniere는 2.8개월에서 생존), 이자 자본화는 프로젝트 규모의 반영일 뿐이었다."))
     axes = sc.load_axis_validation()
     if not axes.empty:
         table(axes.rename(columns={"label": "항목", "verdict": "판정", "maintained_value": "유지 그룹",
                                    "collapsed_value": "붕괴 그룹", "evidence": "근거", "keep": "처리"})
               [["항목", "판정", "유지 그룹", "붕괴 그룹", "처리", "근거"]])
-    st.warning(
-        "**처음 세웠던 7개 축 중 3개는 판별력이 없었다.** 런웨이는 유지 9.0개월 vs 붕괴 7.2개월로 "
-        "사실상 차이가 없었고(Cheniere는 2.8개월에서 생존), 이자 자본화는 프로젝트 규모의 반영일 뿐이었다. "
-        "그 항목들은 참고 지표로 내렸다.",
-        icon="⚠️",
-    )
 
-    st.markdown("##### 기업별 — 주가가 많이 오른 곳부터")
-    st.caption(
+    heading("기업별 — 주가가 많이 오른 곳부터", help_text=(
         f"페르미는 {sc.FERMI_T0}년에 대규모 자본 투입을 시작했고 지금은 **T0+{sc.FERMI_STAGE_OFFSET}년차**다. "
-        "각 기업이 같은 연차에 있던 해를 찾아 그때부터 지금까지의 주가를 쟀다. "
-        "보유 기간이 1.6년에서 15.7년까지 제각각이라 총수익률만 보면 오래 보유한 쪽이 유리해 보이므로 "
-        "**연환산**을 함께 둔다.\n\n"
-        "그 해에 아직 상장 전이었거나 회생 중이던 기업은 **상장(재상장) 첫 관측치**부터 쟀다. "
-        "카드마다 어느 기준인지 표시된다."
-    )
+        "각 기업이 같은 연차에 있던 해를 찾아 그때부터 지금까지의 주가를 쟀다. 보유 기간이 1.6~15.7년으로 "
+        "제각각이라 **연환산**을 함께 둔다.\n\n"
+        "그 해에 상장 전이었거나 회생 중이던 기업은 **상장(재상장) 첫 관측치**부터 쟀다. Talen과 "
+        "Core Scientific은 파산 직후 재상장이라 바닥에서 시작해 수익률이 크게 잡힌다 — 같은 잣대로 "
+        "비교하면 안 된다.\n\n"
+        "**해석 주의 3가지** — ① 시세를 구할 수 있는 기업이 그룹당 3곳뿐. ② 유지 그룹 중 2023~24년 "
+        "기준인 곳(Bloom·Applied Digital)은 AI 랠리와 겹쳐 펀더멘탈만의 효과가 아니다. "
+        "③ **유지 그룹 3곳은 그 시점에 이미 매출이 있었다** — 무매출이었던 곳은 NextDecade와 Oklo뿐이고 "
+        "둘 다 미결이다."))
 
     companies = sc.company_view()
     priced = companies.dropna(subset=["total_return_pct"]).copy()
     rank_col, cap_col = st.columns(2)
     with rank_col:
         if not priced.empty:
-            st.markdown("**총수익률** (%)")
+            st.markdown("**총수익률 (%)**")
             overview = priced.sort_values("total_return_pct", ascending=False).copy()
             overview["라벨"] = overview.apply(
                 lambda r: f"{r['company']} ({r['group']}"
                           + (" · 상장 후" if r["basis"] == "상장/재상장 후" else "") + ")", axis=1)
-            st.plotly_chart(bar(overview, "라벨", "total_return_pct", th.SERIES[0], unit="%",
-                                digits=1, horizontal=True, height=330), use_container_width=True)
+            st.plotly_chart(bar(overview, "라벨", "total_return_pct", unit="%", digits=1,
+                                horizontal=True, height=330), use_container_width=True)
     with cap_col:
         caps = companies.dropna(subset=["market_cap"]).copy()
         if not caps.empty:
-            st.markdown("**시가총액** (십억 달러)")
+            st.markdown("**시가총액 (십억$)**")
             caps["십억$"] = caps["market_cap"] / 1e9
             caps["라벨"] = caps["company"] + " (" + caps["group"].astype(str) + ")"
-            fermi_cap = m.get("market_cap")
-            if fermi_cap:
+            if m.get("market_cap"):
                 caps = pd.concat([caps, pd.DataFrame([
-                    {"라벨": "★ Fermi ← 현재", "십억$": fermi_cap / 1e9}])])
-            caps = caps.sort_values("십억$", ascending=False)
-            st.plotly_chart(bar(caps, "라벨", "십억$", th.SERIES[0], unit="십억$", digits=1,
-                                horizontal=True, height=330), use_container_width=True)
-    st.caption(
-        "**'상장 후' 표시가 붙은 곳은 출발점이 다르다.** Talen과 Core Scientific은 파산 직후 "
-        "재상장이라 바닥에서 시작해 수익률이 크게 잡힌다. 같은 잣대로 비교하면 안 된다. "
-        "시가총액은 규모를 견주는 눈금이다 — 페르미가 유지 그룹 수준에 도달한다는 것이 "
-        "몇 배를 뜻하는지 보여준다."
-    )
+                    {"라벨": "★ Fermi ← 현재", "십억$": m["market_cap"] / 1e9}])])
+            st.plotly_chart(bar(caps.sort_values("십억$", ascending=False), "라벨", "십억$",
+                                unit="십억$", digits=1, horizontal=True, height=330),
+                            use_container_width=True)
 
     STATUS_BY_GROUP = {"유지": "good", "진행중": "info", "붕괴": "critical"}
     for rank, row in enumerate(companies.itertuples(), start=1):
         group = str(row.group)
         with st.container(border=True):
-            st.markdown(
-                f"**{rank}. {row.company} ({row.ticker})** &nbsp; "
-                f"{th.STATUS_ICON[STATUS_BY_GROUP.get(group, 'info')]} {group} &nbsp;·&nbsp; {row.sub}"
-            )
+            st.markdown(f"**{rank}. {row.company} ({row.ticker})** &nbsp; "
+                        f"{th.STATUS_ICON[STATUS_BY_GROUP.get(group, 'info')]} {group} "
+                        f"&nbsp;·&nbsp; {row.sub}")
             metric_row([
-                ("시가총액", fd.usd(row.market_cap) if pd.notna(row.market_cap) else "–",
-                 "현재 기준. 페르미와 규모를 견줘 보는 눈금"),
+                ("시가총액", fd.usd(row.market_cap) if pd.notna(row.market_cap) else "–", ""),
                 ("계약 커버리지", fd.num(row.coverage, 0, "%") if pd.notna(row.coverage) else "미공개",
-                 "대규모 자본 투입 시점에 장기계약으로 덮인 용량 비중"),
+                 "대규모 자본 투입 시점 기준"),
                 ("총수익률", fd.num(row.total_return_pct, 1, "%") if pd.notna(row.total_return_pct) else "–",
                  f"{row.basis_asof} → 현재 ({row.basis})" if pd.notna(row.basis_asof) else ""),
                 ("연환산", fd.num(row.cagr_pct, 1, "%/년") if pd.notna(row.cagr_pct) else "–",
@@ -439,31 +425,24 @@ with tabs[3]:
                 ("T0→흑자", fd.num(row.years_to_turn, 0, "년") if pd.notna(row.years_to_turn) else "미도달",
                  "대규모 투자 시작에서 영업현금흐름 흑자까지"),
             ])
-
-            # 계약 커버리지와 연환산 수익률만 같이 그린다. 둘 다 %라 축을 공유할 수 있고,
-            # 이 대시보드의 논지(계약이 결과를 갈랐다)가 기업 하나 안에서 그대로 보인다.
-            # 총수익률은 -99%에서 +1,454%까지라 같이 그리면 나머지가 뭉개진다.
             factors = []
             if pd.notna(row.coverage):
                 factors.append({"지표": "계약 커버리지(%)", "값": float(row.coverage)})
             if pd.notna(row.cagr_pct):
-                factors.append({"지표": "연환산 수익률(%/년)", "값": float(row.cagr_pct)})
+                factors.append({"지표": "연환산(%/년)", "값": float(row.cagr_pct)})
             chart_col, table_col = st.columns([0.42, 0.58])
             with chart_col:
                 if factors:
-                    st.plotly_chart(
-                        bar(pd.DataFrame(factors), "지표", "값", th.SERIES[0], unit="%", digits=1,
-                            horizontal=True, height=150),
-                        use_container_width=True, key=f"factors_{row.ticker}")
-                else:
-                    st.caption("그릴 수 있는 수치가 없다 — 아래 사유 참고")
+                    st.plotly_chart(bar(pd.DataFrame(factors), "지표", "값", unit="%", digits=1,
+                                        horizontal=True, height=150),
+                                    use_container_width=True, key=f"factors_{row.ticker}")
             with table_col:
                 detail = [
                     ("같은 위치였던 해", str(int(row.matched_year)) if pd.notna(row.matched_year) else "–"),
                     ("수익률 기준", f"{row.basis} ({row.basis_asof} 시작)"
                      if pd.notna(row.basis_asof) else "산출 불가"),
                     ("그해 매출", fd.usd(row.revenue_then) if pd.notna(row.revenue_then) else "0 / 미상"),
-                    ("그때 주가 → 현재",
+                    ("그때 → 현재",
                      f"${row.price_then:,.2f} → ${row.price_now:,.2f}"
                      if pd.notna(row.price_then) and pd.notna(row.price_now) else "–"),
                     ("배수", f"{row.multiple:,.2f}배" if pd.notna(row.multiple) else "–"),
@@ -475,42 +454,13 @@ with tabs[3]:
                 table(pd.DataFrame(detail, columns=["항목", "내용"]))
 
     if not priced.empty:
-        st.markdown("**그룹별 연환산 수익률** (%/년)")
+        heading("그룹별 연환산 (%/년)")
         table(priced.groupby("group", observed=True)["cagr_pct"]
               .agg(["count", "mean", "min", "max"]).round(1).reset_index()
               .rename(columns={"group": "그룹", "count": "기업 수", "mean": "평균",
                                "min": "최악", "max": "최선"}))
 
-    st.warning(
-        "**이 표를 그대로 페르미에 대입하면 안 되는 이유가 셋 있다.** "
-        "① 시세를 구할 수 있는 기업이 그룹당 3곳뿐이다. "
-        "② 유지 그룹의 기준 시점이 2023~2024년인 곳(Bloom·Applied Digital)은 AI 인프라 랠리 구간과 "
-        "겹쳐 펀더멘탈만의 효과가 아니다. 12.7년에 걸친 Cheniere의 연 15.6%가 순수한 인프라 사이클에 더 가깝다. "
-        "③ **유지 그룹 3곳은 그 시점에 이미 매출이 있었다.** 그때도 매출이 0이었던 곳은 NextDecade와 "
-        "Oklo뿐이고 둘 다 아직 미결이다. 페르미와 진짜로 같은 위치였던 기업들은 아직 답을 내놓지 않았다.",
-        icon="⚠️",
-    )
-    if companies["price_then"].isna().any():
-        st.info(
-            "**맨 아래 Tellurian은 시세를 아예 구하지 못했고, 구하지 못한 이유가 곧 결과다.** "
-            "2024년 상장폐지로 이력이 사라졌다. -99%로 적히지 않았을 뿐 실질은 그보다 나쁘다"
-            "(주당 $1.00에 매각). 카드의 '시세 공백 사유'에 적어 뒀다.",
-            icon="🚫",
-        )
-    if (companies["basis"] == "상장/재상장 후").any():
-        st.info(
-            "**'상장/재상장 후' 기준 3곳은 다른 곳과 출발점이 다르다.** Talen(2023-05)과 "
-            "Core Scientific(2024-01)은 챕터11을 지나 재상장한 직후가 출발점이라 바닥에서 시작하고, "
-            "Venture Global(2025-01)은 IPO 직후가 출발점이다. T0+1년차 기준인 나머지와 같은 잣대로 "
-            "비교하면 안 된다 — 특히 재상장 두 곳은 '파산 후 회복분'이 수익률에 통째로 들어가 있다.",
-            icon="📐",
-        )
-        st.caption(
-            "붕괴는 느리게 온다 — New Fortress는 6.7년, FuelCell은 15.7년에 걸쳐 내려갔다. "
-            "지금의 페르미 위치에서 결론이 나기까지는 수년이 걸린다."
-        )
-
-    st.markdown("##### 연도별 원본 재무")
+    heading("연도별 원본 재무")
     annuals = sc.load_annuals()
     if not annuals.empty:
         picked = st.selectbox("기업", sorted(annuals["company"].unique()))
@@ -523,193 +473,157 @@ with tabs[3]:
             "net_income": "순손익", "cash": "현금", "equity": "자기자본", "debt": "장기차입",
             "shares": "주식수(백만)"})[["회계연도", "매출", "영업CF", "설비투자", "순손익", "현금",
                                         "자기자본", "장기차입", "주식수(백만)"]])
-        st.caption("단위 백만 달러. SEC EDGAR XBRL — `python refresh_sector.py`로 갱신한다.")
 
 # ── ⑤ 시장·수급 ───────────────────────────────────────────────────────────────
 with tabs[4]:
-    st.markdown("#### 주가가 왜 움직였는가")
-    st.caption(
-        "**이 탭은 펀더멘탈이 아니다.** 회사의 건강이 아니라 주가 움직임을 설명하는 층이다. "
-        "상장 후 219거래일로 실측한 결과 페르미는 AI 인프라 동종주와 상관 0.39~0.45로 붙어 다녔고, "
-        "금리(10년 실질 -0.13)와 천연가스(-0.05)는 예상보다 훨씬 약했다. 그래서 여기서는 "
-        "**테마에서 오는 몫을 걷어내고 페르미 고유 움직임만** 남기는 데 집중한다."
-    )
+    heading("주가가 왜 움직였는가", size="####", help_text=(
+        "**이 탭은 펀더멘탈이 아니다.** 회사의 건강이 아니라 주가 움직임을 설명하는 층이다.\n\n"
+        "상장 후 219거래일 실측: AI 인프라 동종주 상관 0.39~0.45, 광의 시장 0.28~0.33, "
+        "금리(10년 실질) -0.13, 천연가스 -0.05. **금리와 가스는 예상보다 훨씬 약했다.**\n\n"
+        "쓰임새는 하나다 — 공시가 났을 때 주가가 움직인 것이 **그 공시 때문인지 그날 AI주가 다 움직인 "
+        "것인지** 가르는 것. 상관 0.46은 인과가 아니라 같은 테마에 실려 있다는 뜻일 뿐이다."))
 
-    with st.spinner("시장·수급 데이터 불러오는 중..."):
-        basket = mflow.basket_frame()
-        theme = mflow.theme_view(basket)
-        stats = mflow.theme_stats(basket)
-        shorts = mflow.short_interest()
+    basket = mflow.basket_frame()
+    theme_view = mflow.theme_view(basket)
+    stats = mflow.theme_stats(basket)
+    shorts = mflow.short_interest()
 
-    st.markdown("##### 축 A — 테마 동조도")
+    heading("축 A — 테마 동조도")
     if stats:
         metric_row([
-            ("바스켓 상관 (전체)", fd.num(stats.get("corr_full"), 3),
-             "일간 수익률 기준. 1에 가까울수록 테마와 같이 움직인다"),
-            (f"바스켓 상관 (최근 {mflow.ROLLING_WINDOW}일)", fd.num(stats.get("corr_rolling"), 3),
-             "최근 들어 동조도가 커졌는지 작아졌는지"),
+            ("바스켓 상관 (전체)", fd.num(stats.get("corr_full"), 3), "일간 수익률 기준"),
+            (f"상관 (최근 {mflow.ROLLING_WINDOW}일)", fd.num(stats.get("corr_rolling"), 3),
+             "최근 동조도 변화"),
             ("1개월 상대강도", fd.num(stats.get("rs_1개월"), 1, "%p"),
              f"페르미 {fd.num(stats.get('fermi_1개월'), 1, '%')} vs 바스켓 {fd.num(stats.get('basket_1개월'), 1, '%')}"),
             ("3개월 상대강도", fd.num(stats.get("rs_3개월"), 1, "%p"),
              f"페르미 {fd.num(stats.get('fermi_3개월'), 1, '%')} vs 바스켓 {fd.num(stats.get('basket_3개월'), 1, '%')}"),
         ])
-
-    if not theme.empty:
-        st.markdown("**상장일을 100으로 맞춘 추이**")
-        st.plotly_chart(compare_line(theme, "date", [("페르미", "페르미"), ("바스켓", "AI 인프라 바스켓")]),
+    if not theme_view.empty:
+        last = theme_view.iloc[-1]
+        heading(f"상장일=100 기준 · 페르미 {last['페르미']:,.0f} vs 바스켓 {last['바스켓']:,.0f}",
+                help_text=(
+                    "두 선이 벌어진 폭이 **테마로 설명되지 않는 페르미 고유의 몫**이다.\n\n"
+                    f"바스켓은 {', '.join(stats.get('members', []))} 동일가중이다. 시총가중으로 하면 "
+                    "CoreWeave 하나가 지수를 지배해 '테마'가 아니라 'CoreWeave 대비'가 된다."))
+        st.plotly_chart(compare_line(theme_view, "date",
+                                     [("페르미", "페르미"), ("바스켓", "AI 인프라 바스켓")]),
                         use_container_width=True)
-        last = theme.iloc[-1]
-        st.caption(
-            f"상장 이후 페르미 **{last['페르미']:,.0f}** vs 바스켓 **{last['바스켓']:,.0f}** (기준 100). "
-            "두 선이 벌어진 폭이 테마로 설명되지 않는 페르미 고유의 몫이다. "
-            f"바스켓은 {', '.join(stats.get('members', []))} 동일가중이며, 시총가중으로 하면 "
-            "CoreWeave 하나가 지수를 지배해 '테마'가 아니라 'CoreWeave 대비'가 된다."
-        )
-        table(theme.assign(날짜=theme["date"].dt.date).rename(
-            columns={"페르미": "페르미(100기준)", "바스켓": "바스켓(100기준)"})
-            [["날짜", "페르미(100기준)", "바스켓(100기준)"]].tail(10).round(1))
 
     peers = mflow.peer_correlations(basket)
     if not peers.empty:
-        st.markdown("**구성종목별 상관**")
         left, right = st.columns([0.55, 0.45])
         with left:
-            st.plotly_chart(bar(peers, "종목", "상관", th.SERIES[0], unit="", digits=3,
-                                horizontal=True, height=240), use_container_width=True)
+            heading("구성종목별 상관")
+            st.plotly_chart(bar(peers, "종목", "상관", unit="", digits=3, horizontal=True,
+                                height=240), use_container_width=True)
         with right:
+            heading("표")
             table(peers)
 
     st.divider()
-    st.markdown("##### 축 B — 종목 수급")
+    heading("축 B — 종목 수급")
     if not shorts.empty:
         latest = shorts.iloc[-1]
         shares_out = m.get("shares_out")
         metric_row([
             ("공매도 잔고", fd.num(latest["shares"] / 1e6, 1, "백만주"),
              f"결제일 {latest['date'].date()} · 격주 공시"),
-            ("발행주식 대비", fd.pct(latest["shares"] / shares_out) if shares_out else "–",
-             "발행주식수 대비 공매도 비율"),
-            ("Days to cover", fd.num(latest["days_to_cover"], 2, "일"),
-             "평균 거래량 기준 환매수에 걸리는 일수"),
-            ("기관 보유", mflow.ownership().get("SharesOutstandingPCT", "–"),
-             "13F 기준 · 분기 공시라 시차가 있다"),
+            ("발행주식 대비", fd.pct(latest["shares"] / shares_out) if shares_out else "–", ""),
+            ("Days to cover", fd.num(latest["days_to_cover"], 2, "일"), "평균 거래량 기준"),
+            ("기관 보유", mflow.ownership().get("SharesOutstandingPCT", "–"), "13F · 분기 공시"),
         ])
         chart = shorts.copy()
         chart["결제일"] = chart["date"].dt.strftime("%y-%m-%d")
         chart["잔고(백만주)"] = chart["shares"] / 1e6
-        st.plotly_chart(bar(chart, "결제일", "잔고(백만주)", th.SERIES[0], unit="백만주", digits=1),
+        st.plotly_chart(bar(chart, "결제일", "잔고(백만주)", unit="백만주", digits=1),
                         use_container_width=True)
 
         hedge = mflow.convertible_hedge(shorts, m.get("conv_shares"))
         if hedge:
-            st.info(
-                f"**공매도 급증분은 하락 베팅이 아닐 수 있다.** "
+            st.info(f"**공매도 급증분은 하락 베팅이 아닐 수 있다** — "
+                    f"{hedge['increase']/1e6:,.1f}백만주 증가 = 전환주식수의 "
+                    f"{hedge['coverage']*100:,.0f}%", icon="🔁")
+            note(
                 f"{hedge['before_date'].date()} {hedge['before']/1e6:,.1f}백만주 → "
                 f"{hedge['after_date'].date()} {hedge['after']/1e6:,.1f}백만주로 "
-                f"**{hedge['increase']/1e6:,.1f}백만주** 늘었는데, 그 사이 "
-                f"{hedge['issue_date'].date()}에 전환사채가 발행됐다. 전환 가능 주식수 "
-                f"{hedge['conv_shares']/1e6:,.1f}백만주의 **{hedge['coverage']*100:,.0f}%**에 해당한다.\n\n"
+                f"{hedge['increase']/1e6:,.1f}백만주 늘었는데, 그 사이 {hedge['issue_date'].date()}에 "
+                f"전환사채가 발행됐다. 전환 가능 주식수 {hedge['conv_shares']/1e6:,.1f}백만주의 "
+                f"**{hedge['coverage']*100:,.0f}%**에 해당한다.\n\n"
                 "전환사채를 산 쪽은 보통 주식을 빌려 팔아 델타를 중립으로 맞춘다. 초기 헤지는 통상 "
-                "전환주식수의 30~60% 선이라, 이 증가분은 헤지로 설명되는 범위 안에 있다. "
-                "하락 베팅과 섞어 읽으면 수급을 정반대로 해석하게 된다.",
-                icon="🔁",
-            )
+                "전환주식수의 30~60% 선이라 이 증가분은 헤지로 설명되는 범위 안에 있다. "
+                "하락 베팅과 섞어 읽으면 수급을 정반대로 해석하게 된다.", label="자세히")
         table(shorts.assign(결제일=shorts["date"].dt.date).rename(columns={
             "shares": "공매도 잔고", "avg_volume": "평균 거래량", "days_to_cover": "Days to cover"})
             [["결제일", "공매도 잔고", "평균 거래량", "Days to cover"]].iloc[::-1].round(2))
-    else:
-        st.warning("공매도 잔고를 불러오지 못했다(Nasdaq API). 잠시 후 다시 시도하면 된다.", icon="⚠️")
 
     insiders = mflow.insider_activity()
     if not insiders.empty:
-        st.markdown("**내부자 거래 요약**")
+        heading("내부자 거래", help_text=(
+            "건수만 집계된 값이다. 금액과 개별 내역은 **참고 지표 → 지배구조**의 SEC 공시 목록에서 "
+            "Form 4를 직접 열어 확인한다."))
         table(insiders)
-        st.caption(
-            "건수만 집계된 값이다. 금액과 개별 내역은 **참고 지표 → 지배구조** 탭의 SEC 공시 "
-            "목록에서 Form 4를 직접 열어 확인한다."
-        )
-
-    st.warning(
-        "**이 지표들로 펀더멘탈을 판단하지 않는다.** 상관 0.46은 인과가 아니라 같은 테마에 실려 있다는 "
-        "뜻일 뿐이고, 관측 구간도 219거래일에 불과하다. 쓰임새는 하나다 — 공시가 났을 때 주가가 "
-        "움직인 것이 **그 공시 때문인지 그날 AI주가 다 움직인 것인지** 가르는 것.",
-        icon="⚠️",
-    )
-
 
 # ── ⑥ 뉴스·소문 ───────────────────────────────────────────────────────────────
 with tabs[5]:
-    st.markdown("#### 계약 숫자를 바꿀 소식이 떴는가")
-    st.caption(
-        "**뉴스는 펀더멘탈이 아니다.** 이 화면의 목적은 하나다 — 핵심 판정 ①(계약 커버리지 "
-        f"{fd.pct(m.get('contracted_vs_landed'))})을 바꿀 소식을 먼저 알아채는 것. 그래서 제목에서 "
-        "계약·테넌트 키워드를 뽑아 맨 위로 올린다. **확정은 SEC 공시로만 한다** — 대시보드의 "
-        "계약 MW 숫자는 8-K를 근거로만 갱신된다."
-    )
+    heading("계약 숫자를 바꿀 소식이 떴는가", size="####", help_text=(
+        "**뉴스는 펀더멘탈이 아니다.** 목적은 하나 — 핵심 판정 ①(계약 커버리지 "
+        f"{fd.pct(m.get('contracted_vs_landed'))})을 바꿀 소식을 먼저 알아채는 것.\n\n"
+        "**확정은 SEC 공시로만 한다.** 계약 MW는 8-K를 근거로만 갱신되고, 월요일 09:00 클라우드 "
+        "루틴이 그 8-K를 읽어 `data/contracts.csv`를 고쳐 커밋한다.\n\n"
+        "이 탭은 서버 크론이 30분마다 채워 둔 파일만 읽는다. 화면에서 직접 받으면 Nasdaq 응답이 "
+        "5초 가까이 걸리는데, Streamlit은 어느 탭을 보든 모든 탭 코드를 실행해서 뉴스 탭을 안 보는 "
+        "사람까지 그 시간을 물게 된다."))
 
-    # 화면은 디스크 캐시만 읽는다. 채우는 일은 크론이 refresh_news.py로 미리 한다.
     articles, chatter = nw.cached_articles(), nw.cached_community()
     age = nw.cache_age()
     if age is not None:
         minutes = int(age.total_seconds() // 60)
-        note = f"마지막 수집 {minutes}분 전"
         if minutes > 90:
-            st.warning(f"{note} — 수집 크론이 멈췄을 수 있다. "
-                       "`docker compose exec -T fermi-dashboard python refresh_news.py`로 확인.", icon="⏳")
+            st.warning(f"마지막 수집 {minutes}분 전 — 수집 크론이 멈췄을 수 있다.", icon="⏳")
         else:
-            st.caption(f"🕒 {note} · 30분마다 서버 크론이 갱신한다")
+            st.caption(f"🕒 마지막 수집 {minutes}분 전 · 30분마다 갱신")
 
     if articles.empty:
-        st.warning(
-            "아직 수집된 뉴스가 없다. 서버에서 한 번 채워 주면 이후로는 크론이 유지한다 — "
-            "`docker compose exec -T fermi-dashboard python refresh_news.py`",
-            icon="⚠️",
-        )
+        st.warning("수집된 뉴스가 없다. 서버에서 `python refresh_news.py`를 한 번 실행하면 된다.",
+                   icon="⚠️")
     else:
-        st.markdown("##### 🤖 AI 정리")
+        heading("🤖 AI 정리", help_text=(
+            "**AI가 정리한 것이지 검증한 것이 아니다.** 기사에 없는 내용을 지어낼 수 있고, 커뮤니티 글은 "
+            "애초에 검증되지 않은 개인 의견이다. 대시보드의 어떤 숫자도 이 정리를 근거로 바뀌지 않는다.\n\n"
+            "새 기사가 뜨면 지문이 바뀌어 크론이 다시 분석한다. 뉴스가 그대로면 같은 결과를 재사용해 "
+            "API를 다시 부르지 않는다."))
         review, review_error, review_key = ai_review.run(articles, chatter, m)
         if review:
             with st.container(border=True):
                 st.markdown(review)
-            st.caption(
-                f"모델 {ai_review.MODEL} · 기사 {min(len(articles), ai_review.MAX_ARTICLES)}건 + "
-                f"커뮤니티 {min(len(chatter), ai_review.MAX_POSTS)}건 기준 · 지문 `{review_key}`. "
-                "**새 기사가 뜨면 지문이 바뀌어 크론이 다시 분석한다.** 뉴스가 그대로면 같은 결과를 "
-                "재사용해 API를 다시 부르지 않는다."
-            )
-            st.warning(
-                "**AI가 정리한 것이지 검증한 것이 아니다.** 기사에 없는 내용을 지어낼 수 있고, "
-                "커뮤니티 글은 애초에 검증되지 않은 개인 의견이다. 대시보드의 어떤 숫자도 이 정리를 "
-                "근거로 바뀌지 않는다 — 계약 MW는 SEC 8-K로만 갱신된다.",
-                icon="🤖",
-            )
+            st.caption(f"{ai_review.MODEL} · 기사 {min(len(articles), ai_review.MAX_ARTICLES)}건 + "
+                       f"커뮤니티 {min(len(chatter), ai_review.MAX_POSTS)}건 · 지문 `{review_key}`")
         elif review_error:
-            st.info(
-                f"AI 정리가 아직 없다 — {review_error}. 새 기사가 들어오면 다음 크론에서 만들어진다.",
-                icon="🤖",
-            )
+            st.info(f"AI 정리 없음 — {review_error}", icon="🤖")
+
         st.divider()
-        hits = nw.contract_hits(articles)
         counts = articles["group"].value_counts()
         metric_row([
-            ("전체 기사", f"{len(articles)}건", "Google 뉴스 · Yahoo · Nasdaq 합산, 중복 제거"),
+            ("전체 기사", f"{len(articles)}건", "Google·Yahoo·Nasdaq 합산, 중복 제거"),
             ("🎯 계약·테넌트", f"{counts.get('계약·테넌트', 0)}건", "핵심 판정을 바꿀 수 있는 소식"),
             ("💰 자금조달", f"{counts.get('자금조달', 0)}건", "증자·사채·차입"),
             ("⚠️ 일정·리스크", f"{counts.get('일정·리스크', 0)}건", "지연·취소·소송·공매도 리포트"),
         ])
 
-        st.markdown("##### 🎯 계약·테넌트 관련")
+        heading("🎯 계약·테넌트 관련")
+        hits = nw.contract_hits(articles)
         if hits.empty:
-            st.info("최근 계약·테넌트 관련 기사가 없다.", icon="🔍")
+            st.caption("최근 계약·테넌트 관련 기사 없음")
         else:
             feed = hits.head(25).copy()
             feed["날짜"] = feed["published"].dt.tz_convert("Asia/Seoul").dt.strftime("%m-%d %H:%M")
             table(feed.rename(columns={"title": "제목", "source": "매체", "url": "링크"})
                   [["날짜", "제목", "매체", "링크"]],
                   column_config={"링크": st.column_config.LinkColumn("링크", display_text="열기")},
-                  height=320)
+                  height=300)
 
-        st.markdown("##### 전체 기사")
+        heading("전체 기사")
         picked_group = st.selectbox("분류", ["전체"] + list(counts.index), index=0)
         feed = articles if picked_group == "전체" else articles[articles["group"] == picked_group]
         feed = feed.head(80).copy()
@@ -718,20 +632,14 @@ with tabs[5]:
         table(feed.rename(columns={"title": "제목", "source": "매체", "url": "링크"})
               [["날짜", "분류", "제목", "매체", "링크"]],
               column_config={"링크": st.column_config.LinkColumn("링크", display_text="열기")},
-              height=420)
+              height=400)
 
-    st.markdown("##### 커뮤니티 반응 (Stocktwits)")
-    st.warning(
+    heading("커뮤니티 (Stocktwits)", help_text=(
         "**검증되지 않은 개인 게시글이다.** 추측·루머·의도적 허위가 섞일 수 있고, 여기 적힌 수치는 "
-        "어떤 것도 확인된 사실이 아니다. 대시보드의 어떤 숫자도 이 글들을 근거로 바뀌지 않는다. "
-        "분위기를 보는 용도로만 둔다.",
-        icon="🗣️",
-    )
+        "어떤 것도 확인된 사실이 아니다. 대시보드의 어떤 숫자도 이 글들을 근거로 바뀌지 않는다."))
     if chatter.empty:
-        st.caption(
-            "커뮤니티 글을 받지 못했다. Stocktwits가 이 서버 IP를 봇 차단(Cloudflare)으로 막고 있어서다. "
-            "차단 우회는 하지 않는다. 커뮤니티발 소식 중 기사화된 것은 위 뉴스 목록에 이미 섞여 들어온다."
-        )
+        st.caption("커뮤니티 글을 받지 못했다 — Stocktwits가 서버 IP를 봇 차단(Cloudflare)으로 막고 있다. "
+                   "차단 우회는 하지 않는다.")
     else:
         view = chatter.head(30).copy()
         view["날짜"] = view["published"].dt.tz_convert("Asia/Seoul").dt.strftime("%m-%d %H:%M")
@@ -739,34 +647,16 @@ with tabs[5]:
         table(view.rename(columns={"body": "내용", "user": "작성자", "url": "링크"})
               [["날짜", "분류", "내용", "작성자", "링크"]],
               column_config={"링크": st.column_config.LinkColumn("링크", display_text="열기")},
-              height=340)
-
-    st.info(
-        "**공식 확인은 여기서 한다.** 계약이 실제로 체결되면 8-K가 올라오고, 그러면 상단 배너가 "
-        "'수동 데이터가 낡았을 수 있습니다'로 바뀐다. 월요일 09:00 클라우드 루틴이 그 8-K를 읽고 "
-        "`data/contracts.csv`를 직접 고쳐 커밋한다. 뉴스는 그보다 먼저 알아채는 용도다.",
-        icon="📋",
-    )
-    st.caption(
-        "이 탭은 서버 크론이 30분마다 채워 둔 파일만 읽는다. 화면에서 직접 받으면 Nasdaq 응답이 "
-        "5초 가까이 걸리는데, Streamlit은 어느 탭을 보든 모든 탭 코드를 실행해서 뉴스 탭을 안 보는 "
-        "사람까지 그 시간을 물게 된다."
-    )
-
+              height=320)
 
 # ── 참고 지표 ─────────────────────────────────────────────────────────────────
 with tabs[6]:
-    st.markdown("#### 판정에서 내린 항목들")
-    st.caption(
+    heading("판정에서 내린 항목들", size="####", help_text=(
         "섹터 검증에서 생존과 붕괴를 가르지 못한 항목이다. 지우면 맥락을 잃으므로 참고로만 남긴다. "
-        "각 항목을 펼치면 왜 내렸는지가 먼저 나온다."
-    )
+        "각 항목을 펼치면 왜 내렸는지가 먼저 나온다."))
     for card in fd.reference_cards(m):
         with st.expander(f"{th.STATUS_ICON[card['status']]}  {card['axis']} — {card['headline']}"):
-            st.caption(f"**왜 참고로 내렸나** — {card.get('demoted', '')}")
-            st.markdown(f"측정: {card['caption']}")
-            if card["note"]:
-                st.markdown(f"메모: {card['note']}")
+            st.caption(f"**왜 내렸나** — {card.get('demoted', '')}")
 
             if card["axis"].startswith("자금여력"):
                 metric_row([
@@ -787,16 +677,13 @@ with tabs[6]:
                 burn = burn.merge(ops[["end", "영업소진"]], on="end", how="left").fillna({"영업소진": 0})
                 burn["설비투자"] /= 1e6
                 burn["영업소진"] /= 1e6
-                st.plotly_chart(grouped_bar(burn, "label", [("설비투자", "설비투자"), ("영업소진", "영업소진")],
+                st.plotly_chart(grouped_bar(burn, "label",
+                                            [("설비투자", "설비투자"), ("영업소진", "영업소진")],
                                             stacked=True), use_container_width=True)
-                cash = m["cash_series"].copy()
-                cash["현금(백만$)"] = (cash["val"] / 1e6).round(1)
-                table(cash[["label", "현금(백만$)", "reported"]].rename(
-                    columns={"label": "분기", "reported": "출처"}))
 
             elif card["axis"].startswith("자본투입"):
                 metric_row([
-                    ("PP&E 총액", fd.usd(m.get("ppe_gross")), "유형자산 취득원가 누계"),
+                    ("PP&E 총액", fd.usd(m.get("ppe_gross")), ""),
                     ("누적 현금 설비투자", fd.usd(m.get("capex_cumulative")), ""),
                     ("비현금 증가분", fd.usd(m.get("noncash_additions")),
                      "미지급 capex · 자본화 이자 · 자본화 주식보상"),
@@ -804,20 +691,19 @@ with tabs[6]:
                 ])
                 ppe = m["ppe_series"].copy()
                 ppe["금액"] = ppe["val"] / 1e6
-                st.plotly_chart(bar(ppe, "label", "금액", th.SERIES[0]), use_container_width=True)
+                st.plotly_chart(bar(ppe, "label", "금액"), use_container_width=True)
 
             elif card["axis"].startswith("자본구조"):
                 metric_row([
                     ("발행주식수", fd.num(m.get("shares_out"), 0, "주"), ""),
-                    ("주식보상 ÷ 판관비", fd.pct(m.get("sbc_ratio")),
-                     f"기준 {pd.Timestamp(m['sbc_ratio_asof']).date()}" if m.get("sbc_ratio_asof") is not None else ""),
+                    ("주식보상 ÷ 판관비", fd.pct(m.get("sbc_ratio")), ""),
                     ("총차입금(프로포마)", fd.usd(m.get("debt_proforma")), "분기말 + 분기 후 전환사채"),
                     ("순차입금(프로포마)", fd.usd(m.get("net_debt_proforma")), ""),
                 ])
                 shares = m["shares_series"].copy()
                 shares["기준일"] = pd.to_datetime(shares["end"]).dt.strftime("%y-%m-%d")
                 shares["주식수"] = shares["val"] / 1e6
-                st.plotly_chart(bar(shares, "기준일", "주식수", th.SERIES[0], unit="백만주", digits=1),
+                st.plotly_chart(bar(shares, "기준일", "주식수", unit="백만주", digits=1),
                                 use_container_width=True)
                 if not m["capital_events"].empty:
                     table(m["capital_events"].rename(columns={
@@ -828,7 +714,8 @@ with tabs[6]:
                 feed = m["filings"].head(50).copy()
                 if not feed.empty:
                     feed["접수일"] = feed["filed"].dt.date
-                    table(feed.rename(columns={"form": "종류", "group": "구분", "title": "제목", "url": "링크"})
+                    table(feed.rename(columns={"form": "종류", "group": "구분", "title": "제목",
+                                               "url": "링크"})
                           [["접수일", "종류", "구분", "제목", "링크"]],
                           column_config={"링크": st.column_config.LinkColumn("링크", display_text="열기")},
                           height=320)
@@ -841,32 +728,29 @@ with tabs[6]:
                     ("EV ÷ 목표 MW", fd.usd(m.get("ev_per_target_mw")), ""),
                 ])
                 if not price_frame.empty:
-                    st.plotly_chart(line(price_frame, "date", "close", "종가", unit="USD", height=300),
-                                    use_container_width=True)
+                    st.plotly_chart(line(price_frame, "date", "close", "종가", unit="USD",
+                                         height=300), use_container_width=True)
 
 # ── 원본 데이터 ───────────────────────────────────────────────────────────────
 with tabs[7]:
-    st.markdown("#### 데이터 출처")
+    heading("데이터 출처", size="####", help_text=(
+        "EDGAR는 현금흐름 항목을 회계연도 기초부터 누적해서 담는다. 그대로 쓰면 4분기 막대가 연간값이 "
+        "되므로 `sec_edgar.periodic_series()`가 누적을 분기 구간으로 되돌린 뒤 화면에 올린다."))
     st.markdown(
         f"""
 | 계층 | 출처 | 갱신 |
 |---|---|---|
-| 페르미 재무제표 | SEC EDGAR XBRL `companyfacts` (CIK {int(sec.CIK)}) | 10-Q/10-K 제출 시 자동 |
-| 최신 분기 발표치 | `data/latest_reported.csv` — 10-Q 이전 8-K 수치 | 수동 |
-| 전력 용량·계약·마일스톤 | `data/power_stages.csv`, `contracts.csv`, `milestones.csv` | 수동 |
-| 자금조달 이력 | `data/capital_events.csv` | 수동 |
-| 섹터 표본 재무·시세 | `data/sector_annuals.csv`, `sector_prices.csv` | `python refresh_sector.py` |
-| 섹터 분류·검증 | `data/sector_profiles.csv`, `axis_validation.csv` | 수동 |
+| 페르미 재무제표 | SEC EDGAR XBRL (CIK {int(sec.CIK)}) | 10-Q/10-K 제출 시 자동 |
+| 최신 분기 발표치 | `data/latest_reported.csv` | 수동 |
+| 전력 용량·계약·마일스톤 | `data/power_stages.csv` 외 | 수동 |
+| 섹터 표본 재무·시세 | `data/sector_*.csv` | `python refresh_sector.py` |
+| 뉴스·AI 정리·수급 캐시 | `data/.cache/` | 크론 30분 |
 | 공시 피드 | SEC EDGAR `submissions` | 30분 캐시 |
-| 시세 | Yahoo Finance 차트 API | 5분 캐시 |
+| 시세 | Yahoo Finance | 5분 캐시 |
 """
     )
-    st.caption(
-        "EDGAR는 현금흐름 항목을 회계연도 기초부터 누적해서 담는다. 그대로 쓰면 4분기 막대가 연간값이 "
-        "되므로 `sec_edgar.periodic_series()`가 누적을 분기 구간으로 되돌린 뒤 화면에 올린다."
-    )
 
-    st.markdown("#### 주요 XBRL 태그 분기 시계열")
+    heading("주요 XBRL 태그 분기 시계열")
     tag_options = {
         "영업활동 현금흐름": fd.TAG_OP_CF, "설비투자(PP&E 취득)": fd.TAG_CAPEX,
         "재무활동 현금흐름": fd.TAG_FIN_CF, "순손익": fd.TAG_NET_LOSS,
@@ -884,7 +768,7 @@ with tabs[7]:
         view["산출"] = view["derived"].map({True: "누적 차분", False: "직접 보고"})
         table(view[["시작", "종료", "구간(일)", "금액(백만$)", "산출"]])
 
-    st.markdown("#### 재무상태표 주요 항목")
+    heading("재무상태표 주요 항목")
     instant_options = {
         "총자산": fd.TAG_ASSETS, "총부채": fd.TAG_LIABILITIES, "자기자본": fd.TAG_EQUITY,
         "PP&E 총액": fd.TAG_PPE_GROSS, "PP&E 순액": fd.TAG_PPE_NET, "현금+제한현금": fd.TAG_CASH_TOTAL,
