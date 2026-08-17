@@ -158,6 +158,10 @@ def main(include_market: bool = False) -> int:
     if text:
         print(f"[ok] AI 정리 생성 (지문 {key}, {len(text)}자)")
         return 0
+    if "호출 간격 제한" in error:
+        # 한도를 지키려고 일부러 거른 것이다. 실패로 찍으면 로그에서 진짜 고장을 못 찾는다.
+        print(f"[skip] {error}")
+        return 0
     print(f"[fail] AI 정리 실패: {error}")
     return 1
 
