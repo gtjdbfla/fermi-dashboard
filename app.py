@@ -238,6 +238,7 @@ with tabs[0]:
     heading("지을 용량을 사 줄 고객이 계약돼 있는가", size="####", help_text=(
         "검증에서 가장 깨끗하게 갈린 지표다. 유지 그룹 6곳은 전부 장기 take-or-pay로 부채 만기를 "
         "덮었고, 붕괴 4곳은 계약이 없거나(Tellurian) 만기가 어긋났다(New Fortress)."))
+    st.caption(fresh.tab_line("contract", m, price_frame))
     metric_row([
         ("구속력 있는 계약", fd.num(m.get("mw_contracted"), 0, " MW"), "서명 완료된 리스 기준"),
         ("반입 설비 대비", fd.pct(m.get("contracted_vs_landed")), "확보한 설비 중 팔린 비중"),
@@ -299,6 +300,7 @@ with tabs[1]:
         "(Plug Power·FuelCell) 도달한 뒤 되돌아갔다(New Fortress).\n\n"
         "**매출의 유무가 아니라 매출이 현금을 만드는가**가 갈랐다 — Core Scientific은 매출 $640M을 "
         "내면서 파산했다."))
+    st.caption(fresh.tab_line("cashflow", m, price_frame))
     metric_row([
         ("현재 매출", fd.usd(m.get("revenue_q")) if m.get("revenue_q") else "$0",
          "XBRL 매출 태그 기준. 태그가 없으면 pre-revenue다"),
@@ -345,6 +347,7 @@ with tabs[2]:
         "목표 시점은 회사가 제시한 것이지 제3자가 검증한 것이 아니다. 다만 **자기가 공언한 일정을 "
         "반복해서 넘기는 것**은 붕괴한 기업들이 공통으로 보인 모습이었다.\n\n"
         "단계 정의와 목표는 `data/roadmap.csv`에 있다."))
+    st.caption(fresh.tab_line("roadmap", m, price_frame))
     if state:
         metric_row([
             ("진척", f"{state['done']} / {state['total']} 단계", "달성한 단계 수"),
@@ -386,6 +389,7 @@ with tabs[3]:
         "나눴다(주가로 나누면 순환논증이 된다). 그런 다음 항목별 값을 두 그룹에 대조했다.\n\n"
         "**처음 세웠던 7개 축 중 3개는 판별력이 없었다.** 런웨이는 유지 9.0개월 vs 붕괴 7.2개월로 "
         "차이가 없었고(Cheniere는 2.8개월에서 생존), 이자 자본화는 프로젝트 규모의 반영일 뿐이었다."))
+    st.caption(fresh.tab_line("sector", m, price_frame))
     axes = sc.load_axis_validation()
     if not axes.empty:
         table(axes.rename(columns={"label": "항목", "verdict": "판정", "maintained_value": "유지 그룹",
@@ -504,6 +508,7 @@ with tabs[4]:
         "금리(10년 실질) -0.13, 천연가스 -0.05. **금리와 가스는 예상보다 훨씬 약했다.**\n\n"
         "쓰임새는 하나다 — 공시가 났을 때 주가가 움직인 것이 **그 공시 때문인지 그날 AI주가 다 움직인 "
         "것인지** 가르는 것. 상관 0.46은 인과가 아니라 같은 테마에 실려 있다는 뜻일 뿐이다."))
+    st.caption(fresh.tab_line("flow", m, price_frame))
 
     basket = mflow.basket_frame()
     theme_view = mflow.theme_view(basket)
@@ -596,6 +601,7 @@ with tabs[5]:
         "이 탭은 서버 크론이 30분마다 채워 둔 파일만 읽는다. 화면에서 직접 받으면 Nasdaq 응답이 "
         "5초 가까이 걸리는데, Streamlit은 어느 탭을 보든 모든 탭 코드를 실행해서 뉴스 탭을 안 보는 "
         "사람까지 그 시간을 물게 된다."))
+    st.caption(fresh.tab_line("news", m, price_frame))
 
     articles, chatter = nw.cached_articles(), nw.cached_community()
     age = nw.cache_age()
@@ -676,6 +682,7 @@ with tabs[6]:
     heading("판정에서 내린 항목들", size="####", help_text=(
         "섹터 검증에서 생존과 붕괴를 가르지 못한 항목이다. 지우면 맥락을 잃으므로 참고로만 남긴다. "
         "각 항목을 펼치면 왜 내렸는지가 먼저 나온다."))
+    st.caption(fresh.tab_line("reference", m, price_frame))
     for card in fd.reference_cards(m):
         with st.expander(f"{th.STATUS_ICON[card['status']]}  {card['axis']} — {card['headline']}"):
             st.caption(f"**왜 내렸나** — {card.get('demoted', '')}")
@@ -758,6 +765,7 @@ with tabs[7]:
     heading("데이터 출처", size="####", help_text=(
         "EDGAR는 현금흐름 항목을 회계연도 기초부터 누적해서 담는다. 그대로 쓰면 4분기 막대가 연간값이 "
         "되므로 `sec_edgar.periodic_series()`가 누적을 분기 구간으로 되돌린 뒤 화면에 올린다."))
+    st.caption(fresh.tab_line("raw", m, price_frame))
     st.markdown(
         f"""
 | 계층 | 출처 | 갱신 |
@@ -766,7 +774,8 @@ with tabs[7]:
 | 최신 분기 발표치 | `data/latest_reported.csv` | 수동 |
 | 전력 용량·계약·마일스톤 | `data/power_stages.csv` 외 | 수동 |
 | 섹터 표본 재무·시세 | `data/sector_*.csv` | `python refresh_sector.py` |
-| 뉴스·AI 정리·수급 캐시 | `data/.cache/` | 크론 30분 |
+| 뉴스·AI 정리·공시 판독 | `data/.cache/` | 크론 30분 |
+| 수급·바스켓·섹터 시총 | `data/.cache/` | 크론 하루 2회 (원본이 일봉·격주·분기) |
 | 공시 피드 | SEC EDGAR `submissions` | 30분 캐시 |
 | 시세 | Yahoo Finance | 5분 캐시 |
 """

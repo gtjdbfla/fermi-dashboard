@@ -54,8 +54,11 @@ def _daily(ticker: str, period: str = "2y") -> pd.DataFrame:
     return frame.drop_duplicates("date").reset_index(drop=True)
 
 
-BASKET_MAX_AGE = 3600
-SUPPLY_MAX_AGE = 21600
+# 크론이 하루 2회만 채우므로 그 간격을 견딜 만큼 잡는다. 짧게 두면 캐시가 먼저 만료돼
+# 화면이 직접 받아오게 되고, 느린층으로 뺀 의미가 없어진다.
+# 원본이 바뀌는 주기를 보면 이래도 충분하다 — 바스켓은 일봉, 공매도는 격주, 기관 보유는 분기다.
+BASKET_MAX_AGE = 46800
+SUPPLY_MAX_AGE = 46800
 
 
 @st.cache_data(ttl=1800, show_spinner=False)

@@ -199,7 +199,7 @@ def stage_matched(offset: int = FERMI_STAGE_OFFSET) -> pd.DataFrame:
     return frame.sort_values(["group", "cagr_pct"], ascending=[True, False]).reset_index(drop=True)
 
 
-CAPS_MAX_AGE = 3600
+CAPS_MAX_AGE = 46800  # 크론 느린층(하루 2회) 간격을 견디게. 시총은 일 단위면 충분하다.
 
 
 @st.cache_data(ttl=3600, show_spinner=False)

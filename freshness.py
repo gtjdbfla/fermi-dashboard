@@ -16,13 +16,26 @@ import diskcache as dc
 DATA_DIR = Path(__file__).parent / "data"
 
 # 이 시간을 넘으면 화면에서 '지연'으로 표시한다. 갱신 주기의 3배쯤으로 잡았다.
+# 빠른층(30분)과 느린층(하루 2회)이 다르다.
 STALE_AFTER = {
     "뉴스·커뮤니티": 5400,
     "AI 정리": 5400,
     "공시 판독": 5400,
-    "AI 인프라 바스켓": 7200,
-    "공매도·기관·내부자": 43200,
-    "섹터 시가총액": 7200,
+    "AI 인프라 바스켓": 90000,
+    "공매도·기관·내부자": 90000,
+    "섹터 시가총액": 90000,
+}
+
+# 탭마다 어떤 데이터를 쓰는지. 화면 상단에 그 탭 것만 짧게 보여준다.
+TAB_SOURCES = {
+    "contract": ["수동 데이터(계약·용량)", "공시 피드"],
+    "cashflow": ["페르미 재무제표(XBRL)", "수동 데이터(계약·용량)"],
+    "roadmap": ["페르미 재무제표(XBRL)", "수동 데이터(계약·용량)", "공시 피드"],
+    "sector": ["섹터 표본 13개사", "섹터 시가총액"],
+    "flow": ["AI 인프라 바스켓", "공매도·기관·내부자", "주가"],
+    "news": ["뉴스·커뮤니티", "AI 정리"],
+    "reference": ["페르미 재무제표(XBRL)", "공시 피드", "주가"],
+    "raw": ["페르미 재무제표(XBRL)"],
 }
 
 
@@ -76,9 +89,9 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
     add("뉴스·커뮤니티", None, dc.age_seconds("articles", "json"), "크론 30분")
     add("AI 정리", None, dc.age_seconds("ai_review", "json"), "새 기사 있을 때")
     add("공시 판독", None, dc.age_seconds("filing_review", "json"), "새 공시 있을 때")
-    add("AI 인프라 바스켓", None, dc.age_seconds("basket", "frame.json"), "크론 30분")
-    add("공매도·기관·내부자", None, dc.age_seconds("supply", "json"), "크론 30분(공시는 격주·분기)")
-    add("섹터 시가총액", None, dc.age_seconds("market_caps", "json"), "크론 30분")
+    add("AI 인프라 바스켓", None, dc.age_seconds("basket", "frame.json"), "크론 하루 2회(원본 일봉)")
+    add("공매도·기관·내부자", None, dc.age_seconds("supply", "json"), "크론 하루 2회(공시 격주·분기)")
+    add("섹터 시가총액", None, dc.age_seconds("market_caps", "json"), "크론 하루 2회")
 
     # 손으로 고치는 계층 — 파일 시각이 아니라 '무엇까지 반영했는가'가 기준이다.
     add("수동 데이터(계약·용량)",
@@ -103,6 +116,20 @@ def worst_age() -> tuple[str, float] | None:
         return None
     name = max(known, key=known.get)
     return name, known[name]
+
+
+def tab_line(tab: str, m: dict, price_frame: pd.DataFrame) -> str:
+    """그 탭이 쓰는 데이터만 골라 한 줄로. 어느 숫자가 언제 것인지 탭 안에서 바로 보이게 한다."""
+    wanted = TAB_SOURCES.get(tab, [])
+    if not wanted:
+        return ""
+    frame = rows(m, price_frame)
+    parts, late = [], False
+    for _, row in frame[frame["데이터"].isin(wanted)].iterrows():
+        when = row["최신 시점"] if row["최신 시점"] != "–" else row["경과"]
+        parts.append(f"{row['데이터']} {when}")
+        late = late or row["상태"].startswith("⚠️")
+    return ("⚠️ " if late else "🕒 ") + " · ".join(parts)
 
 
 def summary_line() -> str:

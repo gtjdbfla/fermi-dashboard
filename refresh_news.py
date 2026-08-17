@@ -66,8 +66,15 @@ def warm_filings() -> None:
         print(f"[warn] 공시 판독 실패: {type(error).__name__}: {error}")
 
 
-def main() -> int:
-    warm_market()
+def main(include_market: bool = False) -> int:
+    """빠른층은 기본, 느린층(시세·수급·시총)은 --slow일 때만.
+
+    원본이 바뀌는 주기가 층마다 다르다. 계약 소식은 8-K가 아무 때나 떨어지므로 놓치면 안 되지만,
+    바스켓은 일봉이고 공매도는 격주 공시, 기관 보유는 분기 공시다. 전부 30분마다 받으면
+    하루 1,392회를 부르는데 그중 대부분이 같은 값을 다시 받는 것이다.
+    """
+    if include_market:
+        warm_market()
     warm_filings()
     articles = raw(news.collect)()
     chatter = raw(news.community)()
@@ -110,4 +117,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(include_market="--slow" in sys.argv))
