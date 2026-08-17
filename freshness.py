@@ -25,6 +25,9 @@ STALE_AFTER = {
     "공매도·기관·내부자": 90000,
     "섹터 시가총액": 90000,
     "섹터 표본 13개사": 259200,
+    "애널리스트 액션": 5400,
+    "애널리스트 정리(AI)": 5400,
+    "애널리스트 컨센서스": 90000,
 }
 
 # 탭마다 어떤 데이터를 쓰는지. 화면 상단에 그 탭 것만 짧게 보여준다.
@@ -34,7 +37,8 @@ TAB_SOURCES = {
     "roadmap": ["페르미 재무제표(XBRL)", "계약·용량 수치", "공시 피드"],
     "sector": ["섹터 표본 13개사", "섹터 시가총액"],
     "flow": ["AI 인프라 바스켓", "공매도·기관·내부자", "주가"],
-    "news": ["뉴스·커뮤니티", "뉴스 정리(AI)", "공시 피드", "경영권 분쟁 기록"],
+    "news": ["뉴스·커뮤니티", "뉴스 정리(AI)", "공시 피드"],
+    "analyst": ["애널리스트 컨센서스", "애널리스트 액션", "애널리스트 정리(AI)", "주가"],
     "reference": ["페르미 재무제표(XBRL)", "공시 피드", "주가"],
     "raw": ["페르미 재무제표(XBRL)"],
 }
@@ -99,6 +103,10 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
     add("30분", "공시 판독(AI)", None, dc.age_seconds("filing_review", "json"), "새 공시 있을 때")
     add("30분", "뉴스 정리(AI)", None, dc.age_seconds("ai_review", "json"),
         "새 기사 있을 때 · 최소 2시간 간격")
+    add("30분", "애널리스트 액션", None, dc.age_seconds("analyst_headlines", "frame.json"),
+        "크론 30분 · 뉴스 제목에서 추출")
+    add("30분", "애널리스트 정리(AI)", None, dc.age_seconds("analyst_review", "json"),
+        "자료 바뀔 때 · 최소 2시간 간격")
 
     import alerts
     state = alerts.status()
@@ -121,6 +129,8 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
     add("하루 2회", "공매도·기관·내부자", None, dc.age_seconds("supply", "json"),
         "09·21시 · 원본 격주·분기 공시")
     add("하루 2회", "섹터 시가총액", None, dc.age_seconds("market_caps", "json"), "09·21시")
+    add("하루 2회", "애널리스트 컨센서스", None, dc.age_seconds("analyst_consensus", "json"),
+        "09·21시 · 원본 월별 갱신")
     add("하루 1회", "섹터 표본 13개사", None, _sector_age(), "07시 · 원본 연간 공시·일봉")
 
     # ── 사람이 확정하는 계층 ──────────────────────────────────────────────────
@@ -129,20 +139,7 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
     add("사람 확정", "계약·용량 수치",
         str(pd.Timestamp(m["staleness_asof"]).date()) if m.get("staleness_asof") is not None else None,
         None, "새 8-K 감지는 자동 · 반영은 커밋")
-    add("사람 확정", "경영권 분쟁 기록", _governance_asof(), _file_age(DATA_DIR / "governance.csv"),
-        "새 위임장 알림은 자동 · 기록은 커밋")
     return pd.DataFrame(records)
-
-
-def _governance_asof() -> str | None:
-    path = DATA_DIR / "governance.csv"
-    if not path.exists():
-        return None
-    try:
-        frame = pd.read_csv(path)
-        return str(pd.to_datetime(frame["date"], errors="coerce").max().date())
-    except Exception:
-        return None
 
 
 @st.cache_data(ttl=60, show_spinner=False)

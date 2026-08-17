@@ -31,11 +31,13 @@ def warm_market() -> None:
     순차 호출 시절 이 셋만 45초였다(시가총액 13종목 33초, 바스켓 4.3초, 수급 7.7초).
     병렬화로 9.7초까지 줄였지만, 그마저도 캐시가 빈 첫 접속자가 문다. 여기서 미리 채운다.
     """
+    import analyst as an
     import market_flow as mf
     import sector as sc
     for label, call in [("바스켓", lambda: raw(mf.basket_frame)(force=True)),
                         ("수급", lambda: raw(mf._supply_raw)(force=True)),
-                        ("시가총액", lambda: raw(sc.market_caps)(force=True))]:
+                        ("시가총액", lambda: raw(sc.market_caps)(force=True)),
+                        ("애널리스트 컨센서스", lambda: raw(an.consensus)(force=True))]:
         try:
             call()
             print(f"[ok] {label} 캐시 갱신")
@@ -106,6 +108,33 @@ def notify(m, articles) -> None:
         print(f"[warn] 알림 전송 오류: {result['error']}")
 
 
+def warm_analyst(m) -> None:
+    """애널리스트 액션(뉴스 제목)과 AI 정리를 미리 만들어 둔다.
+
+    컨센서스 자체는 월 단위로만 바뀌어 느린층에서 받지만, 개별 액션은 장중에 떨어지고
+    그날 주가를 움직인다. 제목 추출은 RSS 한 번이라 빠른층에 둔다.
+    """
+    if m is None:
+        return
+    try:
+        import analyst as an
+        heads = raw(an.headlines)(force=True)
+        actions = an.actions(heads)
+        data = raw(an.consensus)()
+        key = an.fingerprint(data, actions)
+        text, error = an.review(key, an.payload(data, actions), an.facts_from(m))
+        if text and not error:
+            print(f"[ok] 애널리스트 액션 {len(actions)}건 · AI 정리 준비됨")
+        elif error and "간격 제한" in error:
+            print(f"[skip] 애널리스트 AI 정리 — {error}")
+        elif error:
+            print(f"[warn] 애널리스트 AI 정리 실패: {error}")
+        else:
+            print(f"[ok] 애널리스트 액션 {len(actions)}건")
+    except Exception as error:
+        print(f"[warn] 애널리스트 갱신 실패: {type(error).__name__}: {error}")
+
+
 def main(include_market: bool = False) -> int:
     """빠른층은 기본, 느린층(시세·수급·시총)은 --slow일 때만.
 
@@ -139,6 +168,7 @@ def main(include_market: bool = False) -> int:
     print(f"[ok] 기사 {len(articles)}건(계약·테넌트 {hits}건) · 커뮤니티 {len(chatter)}건 저장")
 
     notify(m, articles)
+    warm_analyst(m)
 
     key = ai_review.fingerprint(articles, chatter)
     if ai_review._read_cache().get(key):

@@ -128,30 +128,6 @@ def _kind(text: str) -> str:
     return "확인 필요"
 
 
-def proxy_events(filings: pd.DataFrame) -> list[dict]:
-    """경쟁 위임장 서식이 새로 뜨면 알린다 — 분쟁 재개 신호다.
-
-    2026-07-03 철회는 종결이 아니라 판사 기피로 인한 보류였고, 창업자측은 재개할 수 있다고
-    명시했다. 재개하면 이 서식들이 먼저 나온다. DFAN14A(권유 보조자료)는 두 달에 47건이라
-    빼고 반대측·경쟁 서식만 본다.
-    """
-    import governance as gv
-    contested = gv.contested_filings(filings)
-    if contested is None or contested.empty:
-        return []
-    events = []
-    for row in contested.itertuples():
-        # 중복·오래된 건 거르는 일은 check()가 한다. 여기서 미리 빼면 '감시 N건' 숫자가
-        # 실행마다 달라져 읽는 사람이 헷갈린다.
-        events.append({
-            "id": f"proxy:{row.accn}", "tier": "위임장", "kind": "경영권 분쟁",
-            "when": str(pd.Timestamp(row.filed).date()),
-            "form": row.form, "items": "", "excerpt": "",
-            "title": row.title or row.form, "url": row.url,
-        })
-    return events
-
-
 def filing_events(filings: pd.DataFrame, read_text=None, known: set | None = None) -> list[dict]:
     """감시 대상 Item이 붙은 8-K. read_text(url)를 주면 원문으로 종류까지 가른다.
 
@@ -378,12 +354,6 @@ def compose(event: dict, m: dict) -> str:
                  f"<i>{_escape(event['title'])}</i>"]
         if event.get("excerpt"):
             lines += ["", f"<blockquote>{_escape(event['excerpt'])}</blockquote>"]
-    elif event["tier"] == "위임장":
-        lines = [f"⚖️ <b>경영권 분쟁 — 새 위임장 공시</b>", "",
-                 f"{_escape(event['when'])} · {_escape(event['form'])}",
-                 f"<i>{_escape(event['title'])}</i>", "",
-                 "경쟁 위임장 서식이 새로 접수됐다. 2026-07-03 철회는 판사 기피에 따른 "
-                 "보류였고 소송은 진행 중이므로, <b>권유 재개일 수 있다.</b>"]
     elif event["tier"] == "테넌트":
         lines = [f"🚨 <b>테넌트 악재 — {_escape(event['kind'])}</b>", "",
                  f"{_escape(event['when'])} · {_escape(event.get('source', ''))}",
@@ -418,7 +388,6 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
 
     # 첫 실행에는 어차피 보내지 않으므로 원문을 받지 않는다.
     events = (filing_events(filings, read_text=None if first_run else read_text, known=known)
-              + proxy_events(filings)
               + news_events(articles)
               + tenant_events())
 

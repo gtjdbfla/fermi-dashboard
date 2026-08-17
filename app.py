@@ -15,10 +15,10 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import ai_review
+import analyst as an
 import filing_review as fr
 import freshness as fresh
 import fundamentals as fd
-import governance as gv
 import market
 import market_flow as mflow
 import news as nw
@@ -213,9 +213,6 @@ else:
     st.caption(f"✅ 수동 데이터 {pd.Timestamp(stale['asof']).date()}까지 반영"
                + (f" · {last['verdict']}" if last is not None else ""))
 
-# 분쟁 경과는 ⑥ 뉴스·소문 탭에서 보여준다. 홈 상단에는 두지 않는다.
-gov_state = gv.status()
-
 # ── 핵심 판정 ─────────────────────────────────────────────────────────────────
 heading(
     "핵심 판정", size="####",
@@ -235,7 +232,7 @@ for column, item in zip(st.columns(3), sc.fermi_position(m)):
                 st.markdown(item["detail"])
 
 tabs = st.tabs(["① 계약 커버리지", "② 현금흐름 전환", "③ 로드맵", "④ 섹터 검증", "⑤ 시장·수급",
-                "⑥ 뉴스·소문", "참고 지표", "원본 데이터"])
+                "⑥ 뉴스·소문", "⑦ 애널리스트", "참고 지표", "원본 데이터"])
 
 # ── ① 계약 커버리지 ───────────────────────────────────────────────────────────
 with tabs[0]:
@@ -609,35 +606,6 @@ with tabs[5]:
         "사람까지 그 시간을 물게 된다."))
     st.caption(fresh.tab_line("news", m, price_frame))
 
-    # ── 경영권 분쟁 ───────────────────────────────────────────────────────────
-    # 기사 목록 아래에 두면 묻힌다. 아직 끝나지 않은 사안이라 위에 세운다.
-    gov = gv.timeline()
-    if not gov.empty:
-        heading(f"⚖️ 경영권 분쟁 — {gov_state['icon']} {gov_state['state']}", help_text=(
-            "**아래는 전부 SEC 공시에 적힌 사실이다. 추측이나 기사 인용은 넣지 않았다** — 각 줄의 "
-            "원문 링크로 확인할 수 있다. 이 탭의 다른 항목(기사·커뮤니티·AI 정리)과 성격이 다르다.\n\n"
-            "**왜 보는가.** 지배구조는 섹터 검증에서 판별력이 없어 내린 축이지만, 그건 이사회 독립성 "
-            "비율 같은 통상 지표였다. 여기 기록한 건 다르다 — 공동창업자이자 최대주주가 임시주총을 "
-            "소집해 이사회를 갈아치우고 **매각을 포함한 전략적 검토**를 요구했고, 회사는 동의 철회 "
-            "권유로 맞섰다. $1.2B를 묻고 커버리지가 15%인 회사에서 벌어지는 경영진 교체 다툼은 "
-            "NuScale이 첫 고객을 잃은 것과 같은 종류의 실행 리스크다.\n\n"
-            "표는 `data/governance.csv`에 있고, 경쟁 위임장 서식이 새로 접수되면 텔레그램으로 알린다."))
-        metric_row([
-            ("현재 상태", f"{gov_state['icon']} {gov_state['state']}", gov_state["note"]),
-            ("분쟁 개시", str(pd.Timestamp(gov_state["since"]).date())
-             if pd.notna(gov_state.get("since")) else "–",
-             f"{gov_state['days']}일 경과" if gov_state.get("days") is not None else ""),
-            ("최근 움직임", str(pd.Timestamp(gov_state["last"]).date()), gov_state["last_event"]),
-        ])
-        table(gv.view(gov), column_config={
-            "원문": st.column_config.LinkColumn("원문", display_text="공시"),
-            "": st.column_config.TextColumn("", width="small")})
-        with st.expander("각 사건의 내용 (공시 원문 기준)"):
-            for row in gov.itertuples():
-                st.markdown(f"**{row.date.date()} · {row.actor} — {row.event}**")
-                st.caption(row.detail)
-        st.divider()
-
     articles, chatter = nw.cached_articles(), nw.cached_community()
     age = nw.cache_age()
     if age is not None:
@@ -712,8 +680,99 @@ with tabs[5]:
               column_config={"링크": st.column_config.LinkColumn("링크", display_text="열기")},
               height=320)
 
-# ── 참고 지표 ─────────────────────────────────────────────────────────────────
+# ── ⑦ 애널리스트 ──────────────────────────────────────────────────────────────
 with tabs[6]:
+    heading("애널리스트는 이 회사를 무엇으로 보고 있는가", size="####", help_text=(
+        "**증권사 리포트 원문은 유료다.** 공개된 세 갈래로 같은 내용을 재구성한다 — Nasdaq "
+        "컨센서스 API(목표주가·의견 분포), Nasdaq 실적 추정 API(EPS 컨센서스), 그리고 뉴스 "
+        "제목에 실리는 개별 액션(\"Mizuho cuts price target to $8 on tenant lease delay\").\n\n"
+        "**애널리스트 의견은 펀더멘탈이 아니다.** 목표주가는 예측이지 사실이 아니고, 이 대시보드의 "
+        "어떤 판정도 여기 숫자로 바뀌지 않는다. 그런데도 보는 이유는 **인하 사유가 무엇인지**가 "
+        "핵심 판정 ①과 같은 축인지 확인하기 위해서다."))
+    st.caption(fresh.tab_line("analyst", m, price_frame))
+
+    consensus = an.consensus()
+    if consensus.get("error"):
+        st.warning(f"컨센서스를 받지 못했다 — {consensus['error']}", icon="⚠️")
+    overview = consensus.get("overview") or {}
+    if overview:
+        target = overview.get("priceTarget")
+        upside = (target / m["price"] - 1) * 100 if target and m.get("price") else None
+        metric_row([
+            ("컨센서스 목표주가", f"${target:,.2f}" if target else "–",
+             "애널리스트 평균 예측 — 사실이 아니다"),
+            ("현재가 대비", f"{upside:+.1f}%" if upside is not None else "–",
+             f"현재 ${m['price']:,.2f}" if m.get("price") else ""),
+            ("목표가 범위",
+             f"${overview.get('lowPriceTarget', 0):,.0f} – ${overview.get('highPriceTarget', 0):,.0f}",
+             "저·고 격차가 클수록 전망이 갈린다는 뜻"),
+            ("의견 분포",
+             f"매수 {overview.get('buy', 0)} · 보유 {overview.get('hold', 0)} · "
+             f"매도 {overview.get('sell', 0)}", "커버 중인 증권사"),
+        ])
+
+    trail = an.history_frame(consensus)
+    if not trail.empty:
+        peak = trail.loc[trail["목표주가"].idxmax()]
+        low = trail.loc[trail["목표주가"].idxmin()]
+        latest = trail.iloc[-1]
+        heading("목표주가 추이", help_text=(
+            "**이 그래프가 이 탭의 핵심이다.** 고점 대비 얼마나 내려왔는지, 그리고 최근 방향이 "
+            "어느 쪽인지가 아래 개별 리포트의 인하·상향 사유와 이어진다.\n\n"
+            "의견 수가 함께 줄면 커버리지를 접은 증권사가 있다는 뜻이다."))
+        st.plotly_chart(compare_line(trail, "시점", [("목표주가", "컨센서스 목표주가")],
+                                     unit="$", height=300), use_container_width=True)
+        st.caption(
+            f"고점 ${peak['목표주가']:,.2f}({peak['시점'].strftime('%Y-%m')}) → "
+            f"저점 ${low['목표주가']:,.2f}({low['시점'].strftime('%Y-%m')}, "
+            f"{low['목표주가']/peak['목표주가']-1:+.0%}) → "
+            f"현재 ${latest['목표주가']:,.2f}({latest['목표주가']/peak['목표주가']-1:+.0%})"
+        )
+        view = trail.copy()
+        view["시점"] = view["시점"].dt.strftime("%Y-%m")
+        view["목표주가"] = view["목표주가"].map(lambda v: f"${v:,.2f}")
+        table(view.rename(columns={"buy": "매수", "hold": "보유", "sell": "매도",
+                                   "consensus": "컨센서스"})
+              [["시점", "목표주가", "매수", "보유", "매도", "컨센서스"]], height=260)
+
+    actions = an.actions(an.headlines())
+    heading("개별 증권사 액션", help_text=(
+        "**리포트 원문이 아니라 기사 제목에서 뽑은 것이다.** 증권사 이름이 제목에 없으면 버린다 — "
+        "\"FRMI Stock Price Prediction 2026\" 같은 글이 애널리스트 액션으로 섞이는 걸 막는 "
+        "가장 확실한 기준이다.\n\n"
+        "`언급된 이유`는 제목의 \"on ~\"·\"following ~\" 뒤를 그대로 옮긴 것이다. 제목에 사유가 "
+        "없으면 –로 둔다. 같은 액션을 여러 매체가 쓰면 목표가·사유가 실린 제목만 남긴다."))
+    if actions.empty:
+        st.caption("최근 애널리스트 액션을 찾지 못했다.")
+    else:
+        table(actions.drop(columns=["제목"]), column_config={
+            "링크": st.column_config.LinkColumn("링크", display_text="열기"),
+            "": st.column_config.TextColumn("", width="small")}, height=320)
+
+    eps = consensus.get("eps") or []
+    if eps:
+        heading("EPS 컨센서스", help_text=(
+            "추정 수가 1~2개면 소수 의견이다. `4주 상향`·`4주 하향`은 최근 한 달간 추정치를 올린·"
+            "내린 애널리스트 수로, 방향이 바뀌는 시점이 여기서 먼저 보인다."))
+        table(pd.DataFrame(eps))
+
+    heading("🤖 AI 정리", help_text=(
+        "**AI가 정리한 것이지 검증한 것이 아니다.** 위 컨센서스·추이·액션과 대시보드의 확정 수치를 "
+        "함께 넣고, 애널리스트 전제가 공시된 사실과 어긋나는 곳을 짚게 했다. 투자 판단이나 "
+        "목표주가는 쓰지 않도록 지시했다.\n\n"
+        "자료가 바뀔 때만 다시 만든다. 크론이 미리 채워 두므로 화면에서 기다리지 않는다."))
+    cached_review = an.cached_review()
+    if cached_review.get("text"):
+        with st.container(border=True):
+            st.markdown(cached_review["text"])
+        st.caption(f"지문 `{cached_review.get('fingerprint', '')}` · "
+                   f"생성 {str(cached_review.get('generated_at', ''))[:16]}")
+    else:
+        st.info("AI 정리 대기 — 서버 크론이 다음 실행에서 만든다.", icon="🤖")
+
+
+# ── 참고 지표 ─────────────────────────────────────────────────────────────────
+with tabs[7]:
     heading("판정에서 내린 항목들", size="####", help_text=(
         "섹터 검증에서 생존과 붕괴를 가르지 못한 항목이다. 지우면 맥락을 잃으므로 참고로만 남긴다. "
         "각 항목을 펼치면 왜 내렸는지가 먼저 나온다."))
@@ -796,7 +855,7 @@ with tabs[6]:
                                          height=300), use_container_width=True)
 
 # ── 원본 데이터 ───────────────────────────────────────────────────────────────
-with tabs[7]:
+with tabs[8]:
     heading("데이터 출처", size="####", help_text=(
         "EDGAR는 현금흐름 항목을 회계연도 기초부터 누적해서 담는다. 그대로 쓰면 4분기 막대가 연간값이 "
         "되므로 `sec_edgar.periodic_series()`가 누적을 분기 구간으로 되돌린 뒤 화면에 올린다."))
