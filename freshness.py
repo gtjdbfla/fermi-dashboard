@@ -19,21 +19,22 @@ DATA_DIR = Path(__file__).parent / "data"
 # 빠른층(30분)과 느린층(하루 2회)이 다르다.
 STALE_AFTER = {
     "뉴스·커뮤니티": 5400,
-    "AI 정리": 5400,
-    "공시 판독": 5400,
+    "뉴스 정리(AI)": 5400,
+    "공시 판독(AI)": 5400,
     "AI 인프라 바스켓": 90000,
     "공매도·기관·내부자": 90000,
     "섹터 시가총액": 90000,
+    "섹터 표본 13개사": 259200,
 }
 
 # 탭마다 어떤 데이터를 쓰는지. 화면 상단에 그 탭 것만 짧게 보여준다.
 TAB_SOURCES = {
-    "contract": ["수동 데이터(계약·용량)", "공시 피드", "계약 알림(텔레그램)"],
-    "cashflow": ["페르미 재무제표(XBRL)", "수동 데이터(계약·용량)"],
-    "roadmap": ["페르미 재무제표(XBRL)", "수동 데이터(계약·용량)", "공시 피드"],
+    "contract": ["계약·용량 수치", "공시 피드", "알림(텔레그램)"],
+    "cashflow": ["페르미 재무제표(XBRL)", "계약·용량 수치"],
+    "roadmap": ["페르미 재무제표(XBRL)", "계약·용량 수치", "공시 피드"],
     "sector": ["섹터 표본 13개사", "섹터 시가총액"],
     "flow": ["AI 인프라 바스켓", "공매도·기관·내부자", "주가"],
-    "news": ["뉴스·커뮤니티", "AI 정리", "공시 피드", "계약 알림(텔레그램)"],
+    "news": ["뉴스·커뮤니티", "뉴스 정리(AI)", "공시 피드", "경영권 분쟁 기록"],
     "reference": ["페르미 재무제표(XBRL)", "공시 피드", "주가"],
     "raw": ["페르미 재무제표(XBRL)"],
 }
@@ -57,14 +58,21 @@ def _file_age(path: Path) -> float | None:
     return (time.time() - path.stat().st_mtime) if path.exists() else None
 
 
+def _sector_age() -> float | None:
+    """크론이 갱신한 캐시본을 먼저 본다. 없으면 저장소 커밋본의 파일 시각."""
+    cached = DATA_DIR / ".cache" / "sector_annuals.csv"
+    return _file_age(cached if cached.exists() else DATA_DIR / "sector_annuals.csv")
+
+
 def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
-    """계층별 (항목, 최신 시점, 경과, 갱신 주기, 상태)."""
+    """계층별 (구분, 데이터, 최신 시점, 경과, 갱신 주기, 상태)."""
     records = []
 
-    def add(name, asof, age, cadence):
+    def add(tier, name, asof, age, cadence):
         limit = STALE_AFTER.get(name)
         late = age is not None and limit is not None and age > limit
         records.append({
+            "구분": tier,
             "데이터": name,
             "최신 시점": asof or "–",
             "경과": _ago(age),
@@ -72,51 +80,69 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
             "상태": "⚠️ 지연" if late else ("· 없음" if age is None and asof == "–" else "✅"),
         })
 
-    # 실시간 계층 — 조회 시각이 아니라 데이터 자체의 최신 시점을 쓴다.
+    # ── 접속할 때마다 ─────────────────────────────────────────────────────────
+    # 조회 시각이 아니라 데이터 자체의 최신 시점을 쓴다. 5분 전에 받았어도 값은 어제 종가다.
     last_bar = None
     if price_frame is not None and not price_frame.empty:
         last_bar = str(pd.Timestamp(price_frame.iloc[-1]["date"]).date())
-    add("주가", last_bar, None, "5분 캐시")
-    add("페르미 재무제표(XBRL)",
-        str(pd.Timestamp(m["asof"]).date()) if m.get("asof") is not None else None,
-        None, "10-Q/10-K 제출 시")
+    add("실시간", "주가", last_bar, None, "5분 캐시 · 원본 일봉")
     filings = m.get("filings")
-    add("공시 피드",
+    add("실시간", "공시 피드",
         str(filings.iloc[0]["filed"].date()) if filings is not None and not filings.empty else None,
         None, "30분 캐시")
+    add("실시간", "페르미 재무제표(XBRL)",
+        str(pd.Timestamp(m["asof"]).date()) if m.get("asof") is not None else None,
+        None, "10-Q/10-K 제출 시 자동")
 
-    # 크론이 채우는 디스크 캐시 — 파일 수정 시각이 곧 갱신 시각이다.
-    add("뉴스·커뮤니티", None, dc.age_seconds("articles", "json"), "크론 30분")
-    add("AI 정리", None, dc.age_seconds("ai_review", "json"), "새 기사 있을 때")
-    add("공시 판독", None, dc.age_seconds("filing_review", "json"), "새 공시 있을 때")
-    add("AI 인프라 바스켓", None, dc.age_seconds("basket", "frame.json"), "크론 하루 2회(원본 일봉)")
-    add("공매도·기관·내부자", None, dc.age_seconds("supply", "json"), "크론 하루 2회(공시 격주·분기)")
-    add("섹터 시가총액", None, dc.age_seconds("market_caps", "json"), "크론 하루 2회")
+    # ── 크론 빠른층(30분) ─────────────────────────────────────────────────────
+    add("30분", "뉴스·커뮤니티", None, dc.age_seconds("articles", "json"), "크론 30분")
+    add("30분", "공시 판독(AI)", None, dc.age_seconds("filing_review", "json"), "새 공시 있을 때")
+    add("30분", "뉴스 정리(AI)", None, dc.age_seconds("ai_review", "json"),
+        "새 기사 있을 때 · 최소 2시간 간격")
 
-    # 알림은 '언제 받아왔나'가 아니라 '감시가 살아 있나'를 봐야 한다. 조용히 죽으면
-    # 아무 일도 안 일어난 것과 구분이 안 된다.
     import alerts
     state = alerts.status()
     if not state["configured"]:
-        records.append({"데이터": "계약 알림(텔레그램)", "최신 시점": "–", "경과": "꺼짐",
-                        "갱신 주기": "크론 30분", "상태": "· 미설정"})
+        records.append({"구분": "30분", "데이터": "알림(텔레그램)", "최신 시점": "–",
+                        "경과": "꺼짐", "갱신 주기": "크론 30분", "상태": "· 미설정"})
     else:
         last = state.get("last_sent")
         records.append({
-            "데이터": "계약 알림(텔레그램)",
+            "구분": "30분", "데이터": "알림(텔레그램)",
             "최신 시점": str(pd.Timestamp(last).date()) if last else "발송 없음",
             "경과": _ago(state.get("age")),
             "갱신 주기": f"크론 30분 · 감시 {state['watching']}건",
             "상태": "⚠️ 지연" if (state.get("age") or 0) > 5400 else "✅",
         })
 
-    # 손으로 고치는 계층 — 파일 시각이 아니라 '무엇까지 반영했는가'가 기준이다.
-    add("수동 데이터(계약·용량)",
+    # ── 크론 느린층 — 원본이 자주 안 바뀌는 것들 ──────────────────────────────
+    add("하루 2회", "AI 인프라 바스켓", None, dc.age_seconds("basket", "frame.json"),
+        "09·21시 · 원본 일봉")
+    add("하루 2회", "공매도·기관·내부자", None, dc.age_seconds("supply", "json"),
+        "09·21시 · 원본 격주·분기 공시")
+    add("하루 2회", "섹터 시가총액", None, dc.age_seconds("market_caps", "json"), "09·21시")
+    add("하루 1회", "섹터 표본 13개사", None, _sector_age(), "07시 · 원본 연간 공시·일봉")
+
+    # ── 사람이 확정하는 계층 ──────────────────────────────────────────────────
+    # 계약 MW는 8-K 본문을 읽어야 나온다. AI 판독은 자동으로 돌지만 숫자 확정은 사람이 한다 —
+    # 옵션을 계약으로 잘못 읽으면 핵심 판정 ①이 통째로 틀어진다.
+    add("사람 확정", "계약·용량 수치",
         str(pd.Timestamp(m["staleness_asof"]).date()) if m.get("staleness_asof") is not None else None,
-        None, "공시 나올 때 수동")
-    add("섹터 표본 13개사", None, _file_age(DATA_DIR / "sector_annuals.csv"),
-        "refresh_sector.py 수동")
+        None, "새 8-K 감지는 자동 · 반영은 커밋")
+    add("사람 확정", "경영권 분쟁 기록", _governance_asof(), _file_age(DATA_DIR / "governance.csv"),
+        "새 위임장 알림은 자동 · 기록은 커밋")
     return pd.DataFrame(records)
+
+
+def _governance_asof() -> str | None:
+    path = DATA_DIR / "governance.csv"
+    if not path.exists():
+        return None
+    try:
+        frame = pd.read_csv(path)
+        return str(pd.to_datetime(frame["date"], errors="coerce").max().date())
+    except Exception:
+        return None
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -127,6 +153,7 @@ def worst_age() -> tuple[str, float] | None:
         "AI 인프라 바스켓": dc.age_seconds("basket", "frame.json"),
         "공매도·기관·내부자": dc.age_seconds("supply", "json"),
         "섹터 시가총액": dc.age_seconds("market_caps", "json"),
+        "섹터 표본 13개사": _sector_age(),
     }
     known = {k: v for k, v in ages.items() if v is not None}
     if not known:

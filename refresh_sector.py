@@ -201,9 +201,20 @@ def collect() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
 
 if __name__ == "__main__":
+    import sys
+
+    # 서버 크론은 --cache로 돈다. data/*.csv는 저장소가 추적하므로 서버에서 덮으면
+    # 배포가 쓰는 git pull --ff-only가 깨진다. .cache/는 추적 대상이 아니라 안전하고,
+    # sector._table()이 캐시를 먼저 읽는다.
+    target = (DATA / ".cache") if "--cache" in sys.argv else DATA
     annuals, prices, history = collect()
-    DATA.mkdir(parents=True, exist_ok=True)
-    annuals.to_csv(DATA / "sector_annuals.csv", index=False, encoding="utf-8")
-    prices.to_csv(DATA / "sector_prices.csv", index=False, encoding="utf-8")
-    history.to_csv(DATA / "sector_price_history.csv", index=False, encoding="utf-8")
-    print(f"\n재무 {len(annuals)}행 · 시세요약 {len(prices)}행 · 연도별시세 {len(history)}행 저장 → {DATA}")
+    if annuals.empty or prices.empty:
+        # 일부만 받힌 결과로 덮으면 섹터 검증이 통째로 흔들린다. 기존 값을 지킨다.
+        print("[fail] 재무 또는 시세를 받지 못했다 — 기존 파일을 덮지 않는다")
+        sys.exit(1)
+    target.mkdir(parents=True, exist_ok=True)
+    annuals.to_csv(target / "sector_annuals.csv", index=False, encoding="utf-8")
+    prices.to_csv(target / "sector_prices.csv", index=False, encoding="utf-8")
+    history.to_csv(target / "sector_price_history.csv", index=False, encoding="utf-8")
+    print(f"\n재무 {len(annuals)}행 · 시세요약 {len(prices)}행 · 연도별시세 {len(history)}행 "
+          f"저장 → {target}")

@@ -29,16 +29,30 @@ T0_CAPEX_THRESHOLD = 100e6
 T0_BURN_FALLBACK = 50e6
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
+CACHE_DIR = DATA_DIR / ".cache"
+
+
+def _table(name: str) -> pd.DataFrame:
+    """크론이 갱신한 `.cache/` 사본을 먼저 보고, 없으면 저장소에 커밋된 기준선을 쓴다.
+
+    서버가 `data/*.csv`를 직접 고치면 배포가 쓰는 `git pull --ff-only`가 깨진다. 그래서
+    자동 갱신은 `.cache/`에만 쓰고(추적 대상이 아니다), 저장소 파일은 사람이 커밋한
+    기준선으로 남긴다. 크론이 죽어도 화면은 기준선으로 계속 돈다.
+    """
+    for path in (CACHE_DIR / name, DATA_DIR / name):
+        if path.exists():
+            return pd.read_csv(path)
+    return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_annuals() -> pd.DataFrame:
-    path = DATA_DIR / "sector_annuals.csv"
-    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+    return _table("sector_annuals.csv")
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_prices() -> pd.DataFrame:
-    path = DATA_DIR / "sector_prices.csv"
-    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+    return _table("sector_prices.csv")
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -112,10 +126,9 @@ def summary() -> pd.DataFrame:
     return frame.sort_values(["group", "from_peak_pct"], ascending=[True, False]).reset_index(drop=True)
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_price_history() -> pd.DataFrame:
-    path = DATA_DIR / "sector_price_history.csv"
-    return pd.read_csv(path) if path.exists() else pd.DataFrame()
+    return _table("sector_price_history.csv")
 
 
 # 페르미는 2025년에 대규모 자본 투입을 시작했고 지금은 그 다음 해다. 각 기업의 같은 지점은 T0+1년차.

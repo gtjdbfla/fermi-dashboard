@@ -213,17 +213,8 @@ else:
     st.caption(f"✅ 수동 데이터 {pd.Timestamp(stale['asof']).date()}까지 반영"
                + (f" · {last['verdict']}" if last is not None else ""))
 
-# ── 경영권 분쟁 ───────────────────────────────────────────────────────────────
-# 검증에서 지배구조는 판별력이 없다고 내렸지만, 그건 이사회 독립성 같은 통상 지표였다.
-# 창업자가 매각을 포함한 전략적 검토를 걸고 표 대결을 벌인 것은 실행 리스크라서 위로 올린다.
+# 분쟁 경과는 ⑥ 뉴스·소문 탭에서 보여준다. 홈 상단에는 두지 않는다.
 gov_state = gv.status()
-if gov_state.get("unresolved"):
-    st.warning(
-        f"**경영권 분쟁 {gov_state['state']}** — 공동창업자·최대주주가 이사회 확대와 전략적 "
-        f"검토(매각 포함)를 요구했다. {gov_state['note']} "
-        f"최근 움직임: {pd.Timestamp(gov_state['last']).date()} {gov_state['last_event']}. "
-        f"경과는 **⑥ 뉴스·소문** 탭에서 본다.",
-        icon="⚖️")
 
 # ── 핵심 판정 ─────────────────────────────────────────────────────────────────
 heading(
