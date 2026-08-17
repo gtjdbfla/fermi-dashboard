@@ -13,9 +13,13 @@
 그날 AI주가 다 오른 것인지 구분하지 못하면 공시와 주가를 잘못 엮게 된다.
 """
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pandas as pd
 import requests
 import streamlit as st
+
+import diskcache as dc
 
 YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                                "AppleWebKit/537.36 Chrome/120.0 Safari/537.36"}
@@ -34,12 +38,11 @@ BASKET = {
 ROLLING_WINDOW = 60
 
 
-@st.cache_data(ttl=900, show_spinner=False)
 def _daily(ticker: str, period: str = "2y") -> pd.DataFrame:
     try:
         response = requests.get(
             f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
-            params={"range": period, "interval": "1d"}, headers=YAHOO_HEADERS, timeout=25,
+            params={"range": period, "interval": "1d"}, headers=YAHOO_HEADERS, timeout=10,
         )
         result = response.json()["chart"]["result"][0]
     except Exception:
@@ -51,17 +54,33 @@ def _daily(ticker: str, period: str = "2y") -> pd.DataFrame:
     return frame.drop_duplicates("date").reset_index(drop=True)
 
 
-@st.cache_data(ttl=900, show_spinner=False)
-def basket_frame() -> pd.DataFrame:
-    """페르미와 바스켓 구성종목의 일별 종가를 하나로 합친다. 페르미 상장일 이후만 남긴다."""
-    frame = _daily("FRMI")
+BASKET_MAX_AGE = 3600
+SUPPLY_MAX_AGE = 21600
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def basket_frame(force: bool = False) -> pd.DataFrame:
+    """페르미와 바스켓 구성종목의 일별 종가를 하나로 합친다. 페르미 상장일 이후만 남긴다.
+
+    7종목을 순차로 받으면 4.3초가 걸렸다. 한 번에 받고, 결과는 디스크에도 남겨
+    재기동 직후 첫 접속자가 다시 기다리지 않게 한다.
+    """
+    if not force:
+        cached = dc.load_frame("basket", BASKET_MAX_AGE)
+        if cached is not None and not cached.empty:
+            cached["date"] = pd.to_datetime(cached["date"])
+            return cached
+    with ThreadPoolExecutor(max_workers=7) as pool:
+        parts = list(pool.map(_daily, ["FRMI"] + list(BASKET)))
+    frame = parts[0]
     if frame.empty:
         return frame
-    for ticker in BASKET:
-        member = _daily(ticker)
+    for member in parts[1:]:
         if not member.empty:
             frame = frame.merge(member, on="date", how="left")
-    return frame.sort_values("date").reset_index(drop=True)
+    frame = frame.sort_values("date").reset_index(drop=True)
+    dc.save_frame("basket", frame)
+    return frame
 
 
 def theme_view(frame: pd.DataFrame) -> pd.DataFrame:
@@ -136,16 +155,37 @@ def peer_correlations(frame: pd.DataFrame) -> pd.DataFrame:
 def _nasdaq(path: str, params: dict | None = None) -> dict:
     try:
         response = requests.get(f"https://api.nasdaq.com/api/{path}",
-                                params=params or {}, headers=NASDAQ_HEADERS, timeout=25)
+                                params=params or {}, headers=NASDAQ_HEADERS, timeout=10)
         return response.json().get("data") or {}
     except Exception:
         return {}
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
+def _supply_raw(force: bool = False) -> tuple[dict, dict, dict]:
+    """Nasdaq 세 곳을 한 번에 받는다. 순차로 부르면 7.7초가 그대로 쌓인다.
+
+    공매도는 격주, 기관 보유는 분기, 내부자는 수시 공시라 6시간 캐시로 충분하다.
+    """
+    if not force:
+        cached = dc.load_json("supply", SUPPLY_MAX_AGE)
+        if cached:
+            return tuple(cached)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [
+            pool.submit(_nasdaq, "quote/FRMI/short-interest", {"assetClass": "stocks"}),
+            pool.submit(_nasdaq, "company/FRMI/institutional-holdings", {"assetclass": "stocks"}),
+            pool.submit(_nasdaq, "company/FRMI/insider-trades", {"assetclass": "stocks"}),
+        ]
+        parts = [future.result() for future in futures]
+    if any(parts):
+        dc.save_json("supply", parts)
+    return tuple(parts)
+
+
 def short_interest() -> pd.DataFrame:
-    """공매도 잔고. 격주 공시라 하루에 여러 번 받을 이유가 없어 6시간 캐시한다."""
-    data = _nasdaq("quote/FRMI/short-interest", {"assetClass": "stocks"})
+    """공매도 잔고."""
+    data = _supply_raw()[0]
     rows = (data.get("shortInterestTable") or {}).get("rows") or []
     if not rows:
         return pd.DataFrame(columns=["date", "shares", "avg_volume", "days_to_cover"])
@@ -158,17 +198,13 @@ def short_interest() -> pd.DataFrame:
     return frame.sort_values("date").reset_index(drop=True)
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
 def ownership() -> dict:
-    data = _nasdaq("company/FRMI/institutional-holdings", {"assetclass": "stocks"})
-    summary = data.get("ownershipSummary") or {}
+    summary = (_supply_raw()[1].get("ownershipSummary") or {})
     return {key: (summary.get(key) or {}).get("value") for key in summary}
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
 def insider_activity() -> pd.DataFrame:
-    data = _nasdaq("company/FRMI/insider-trades", {"assetclass": "stocks"})
-    rows = (data.get("numberOfTrades") or {}).get("rows") or []
+    rows = (_supply_raw()[2].get("numberOfTrades") or {}).get("rows") or []
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame([{"구분": r.get("insiderTrade"), "3개월": r.get("months3"),

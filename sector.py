@@ -11,11 +11,14 @@
   ② 영업현금흐름 전환 — 가동 후 현금이 실제로 들어오기 시작하는가 (그리고 되돌아가지 않는가)
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
 import requests
 import streamlit as st
+
+import diskcache as dc
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -196,28 +199,43 @@ def stage_matched(offset: int = FERMI_STAGE_OFFSET) -> pd.DataFrame:
     return frame.sort_values(["group", "cagr_pct"], ascending=[True, False]).reset_index(drop=True)
 
 
+CAPS_MAX_AGE = 3600
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
-def market_caps() -> dict:
+def market_caps(force: bool = False) -> dict:
     """티커별 현재 시가총액. Nasdaq 공개 API에서 받는다.
 
     주가 × 발행주식수로 계산하지 않는 이유: XBRL 발행주식수가 비어 있는 기업이 있고
     (Venture Global, NuScale), 액면병합을 겪은 곳은 시점이 어긋난다. 시가총액은 결과값이라
     출처에서 그대로 받는 편이 안전하다.
     """
+    if not force:
+        cached = dc.load_json("market_caps", CAPS_MAX_AGE)
+        if cached:
+            return cached
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                              "AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
                "Accept": "application/json"}
-    caps = {}
-    for ticker in load_profiles().get("ticker", pd.Series(dtype=str)):
+
+    def one(ticker: str):
         try:
             response = requests.get(f"https://api.nasdaq.com/api/quote/{ticker}/summary",
-                                    params={"assetclass": "stocks"}, headers=headers, timeout=20)
+                                    params={"assetclass": "stocks"}, headers=headers, timeout=10)
             raw = ((response.json().get("data") or {}).get("summaryData") or {}) \
                 .get("MarketCap", {}).get("value")
             value = float(str(raw).replace(",", "")) if raw else None
-            caps[ticker] = value if value else None
+            return ticker, (value or None)
         except Exception:
-            caps[ticker] = None
+            return ticker, None
+
+    # Nasdaq은 한 번에 2~3초씩 걸린다. 13종목을 순차로 부르면 33초였고, 그 시간을 어느 탭을
+    # 보든 매번 물었다(Streamlit은 모든 탭 코드를 실행한다). 동시에 부르면 가장 느린 하나로 줄어든다.
+    tickers = list(load_profiles().get("ticker", pd.Series(dtype=str)))
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        caps = dict(pool.map(one, tickers))
+    if any(caps.values()):
+        dc.save_json("market_caps", caps)
     return caps
 
 

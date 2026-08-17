@@ -24,7 +24,26 @@ def raw(function):
     return getattr(function, "__wrapped__", function)
 
 
+def warm_market() -> None:
+    """시세 바스켓·수급·시가총액도 미리 받아 디스크에 남긴다.
+
+    순차 호출 시절 이 셋만 45초였다(시가총액 13종목 33초, 바스켓 4.3초, 수급 7.7초).
+    병렬화로 9.7초까지 줄였지만, 그마저도 캐시가 빈 첫 접속자가 문다. 여기서 미리 채운다.
+    """
+    import market_flow as mf
+    import sector as sc
+    for label, call in [("바스켓", lambda: raw(mf.basket_frame)(force=True)),
+                        ("수급", lambda: raw(mf._supply_raw)(force=True)),
+                        ("시가총액", lambda: raw(sc.market_caps)(force=True))]:
+        try:
+            call()
+            print(f"[ok] {label} 캐시 갱신")
+        except Exception as error:
+            print(f"[warn] {label} 갱신 실패: {type(error).__name__}: {error}")
+
+
 def main() -> int:
+    warm_market()
     articles = raw(news.collect)()
     chatter = raw(news.community)()
     if articles.empty:
