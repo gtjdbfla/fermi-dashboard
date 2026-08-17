@@ -13,7 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py sec_edgar.py fundamentals.py market.py market_flow.py sector.py roadmap.py \
-     news.py ai_review.py theme.py refresh_sector.py refresh_news.py smoke_test.py ./
+     news.py ai_review.py diskcache.py theme.py refresh_sector.py refresh_news.py smoke_test.py ./
 COPY .streamlit/ .streamlit/
 # data/는 compose에서 볼륨으로 덮어쓰지만, 볼륨 없이 단독 실행해도 동작하도록 이미지에도 넣는다.
 COPY data/ data/
