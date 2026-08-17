@@ -15,12 +15,24 @@ import ai_review
 import news
 
 
+def raw(function):
+    """st.cache_data가 감싼 함수는 벗겨서 부르고, 아닌 것은 그대로 부른다.
+
+    전부 캐시된 함수라고 가정하고 __wrapped__를 붙였다가 fundamentals.compute에서
+    AttributeError가 났고, 그 바람에 AI 정리가 계약 0%라는 엉뚱한 전제로 만들어졌다.
+    """
+    return getattr(function, "__wrapped__", function)
+
+
 def main() -> int:
-    articles = news.collect.__wrapped__()
-    chatter = news.community.__wrapped__()
-    if articles.empty and chatter.empty:
-        print("[fail] 뉴스와 커뮤니티 모두 비어 있다 — 캐시를 덮지 않는다")
+    articles = raw(news.collect)()
+    chatter = raw(news.community)()
+    if articles.empty:
+        print("[fail] 기사를 하나도 받지 못했다 — 캐시를 덮지 않는다")
         return 1
+    if chatter.empty:
+        # Stocktwits는 서버 IP를 Cloudflare로 막는다. 봇 차단을 우회하지 않고 비운 채로 둔다.
+        print("[warn] 커뮤니티 0건 — Stocktwits가 이 IP를 차단했을 수 있다")
 
     news.save_cache(articles, chatter)
     hits = len(news.contract_hits(articles))
@@ -40,8 +52,7 @@ def main() -> int:
         import fundamentals as fd
         import market
         import sec_edgar as sec
-        m = fd.compute.__wrapped__(sec.load_company_facts.__wrapped__(),
-                                   market.load_price.__wrapped__("FRMI")[1])
+        m = raw(fd.compute)(raw(sec.load_company_facts)(), raw(market.load_price)("FRMI")[1])
         facts = {
             "contracted": m.get("mw_contracted") or 0, "customers": m.get("customer_count") or 0,
             "landed": m.get("mw_landed") or 0,
@@ -50,9 +61,11 @@ def main() -> int:
             "debt": f"${(m.get('debt_proforma') or 0)/1e6:,.0f}M",
         }
     except Exception as error:
-        print(f"[warn] 확정 사실을 못 읽었다({type(error).__name__}) — 기본값으로 진행")
+        # 확정 사실 없이 만든 정리는 전제가 틀려 쓸모가 없다. 다음 실행에서 다시 시도한다.
+        print(f"[fail] 확정 사실을 못 읽었다({type(error).__name__}: {error}) — AI 정리를 건너뛴다")
+        return 1
 
-    text, error = ai_review.analyze.__wrapped__(key, ai_review._payload(articles, chatter), facts)
+    text, error = raw(ai_review.analyze)(key, ai_review._payload(articles, chatter), facts)
     if text:
         print(f"[ok] AI 정리 생성 (지문 {key}, {len(text)}자)")
         return 0

@@ -728,7 +728,10 @@ with tabs[5]:
         icon="🗣️",
     )
     if chatter.empty:
-        st.caption("커뮤니티 데이터를 불러오지 못했다.")
+        st.caption(
+            "커뮤니티 글을 받지 못했다. Stocktwits가 이 서버 IP를 봇 차단(Cloudflare)으로 막고 있어서다. "
+            "차단 우회는 하지 않는다. 커뮤니티발 소식 중 기사화된 것은 위 뉴스 목록에 이미 섞여 들어온다."
+        )
     else:
         view = chatter.head(30).copy()
         view["날짜"] = view["published"].dt.tz_convert("Asia/Seoul").dt.strftime("%m-%d %H:%M")
