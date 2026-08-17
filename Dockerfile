@@ -12,9 +12,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py sec_edgar.py fundamentals.py market.py market_flow.py sector.py roadmap.py \
-     news.py ai_review.py filing_review.py diskcache.py freshness.py theme.py \
-     refresh_sector.py refresh_news.py smoke_test.py ./
+# 파일을 하나씩 적었더니 alerts.py를 추가하고 여기에 넣는 걸 잊어 배포가 깨졌다.
+# .dockerignore가 나머지를 막고 있으므로 .py는 통째로 넣는다.
+COPY *.py ./
 COPY .streamlit/ .streamlit/
 # data/는 compose에서 볼륨으로 덮어쓰지만, 볼륨 없이 단독 실행해도 동작하도록 이미지에도 넣는다.
 COPY data/ data/
