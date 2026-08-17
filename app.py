@@ -18,6 +18,7 @@ import ai_review
 import filing_review as fr
 import freshness as fresh
 import fundamentals as fd
+import governance as gv
 import market
 import market_flow as mflow
 import news as nw
@@ -211,6 +212,18 @@ else:
     last = reviews.iloc[-1] if not reviews.empty else None
     st.caption(f"✅ 수동 데이터 {pd.Timestamp(stale['asof']).date()}까지 반영"
                + (f" · {last['verdict']}" if last is not None else ""))
+
+# ── 경영권 분쟁 ───────────────────────────────────────────────────────────────
+# 검증에서 지배구조는 판별력이 없다고 내렸지만, 그건 이사회 독립성 같은 통상 지표였다.
+# 창업자가 매각을 포함한 전략적 검토를 걸고 표 대결을 벌인 것은 실행 리스크라서 위로 올린다.
+gov_state = gv.status()
+if gov_state.get("unresolved"):
+    st.warning(
+        f"**경영권 분쟁 {gov_state['state']}** — 공동창업자·최대주주가 이사회 확대와 전략적 "
+        f"검토(매각 포함)를 요구했다. {gov_state['note']} "
+        f"최근 움직임: {pd.Timestamp(gov_state['last']).date()} {gov_state['last_event']}. "
+        f"경과는 **참고 지표** 탭에서 본다.",
+        icon="⚖️")
 
 # ── 핵심 판정 ─────────────────────────────────────────────────────────────────
 heading(
@@ -685,6 +698,36 @@ with tabs[6]:
         "섹터 검증에서 생존과 붕괴를 가르지 못한 항목이다. 지우면 맥락을 잃으므로 참고로만 남긴다. "
         "각 항목을 펼치면 왜 내렸는지가 먼저 나온다."))
     st.caption(fresh.tab_line("reference", m, price_frame))
+
+    # ── 경영권 분쟁 ───────────────────────────────────────────────────────────
+    gov = gv.timeline()
+    if not gov.empty:
+        heading("⚖️ 경영권 분쟁", size="#####", help_text=(
+            "**왜 여기 있나.** 지배구조는 섹터 검증에서 판별력이 없어 내린 축이다. 다만 그건 "
+            "이사회 독립성 비율 같은 통상 지표였고, 여기 기록한 건 성격이 다르다 — 공동창업자이자 "
+            "최대주주가 임시주총을 소집해 이사회를 갈아치우고 **매각을 포함한 전략적 검토**를 "
+            "요구했으며, 회사는 동의 철회 권유로 맞섰다.\n\n"
+            "$1.2B를 이미 묻었고 커버리지가 15%인 회사에서 경영진 교체 다툼이 벌어지는 것은 "
+            "NuScale이 첫 고객을 잃은 것과 같은 종류의 실행 리스크다.\n\n"
+            "**아래는 전부 공시에 적힌 사실이며 추측은 넣지 않았다.** 각 줄의 원문 링크로 확인할 수 "
+            "있다. 표는 `data/governance.csv`에 있다."))
+        metric_row([
+            ("현재 상태", f"{gov_state['icon']} {gov_state['state']}", gov_state["note"]),
+            ("분쟁 개시", str(pd.Timestamp(gov_state["since"]).date())
+             if pd.notna(gov_state.get("since")) else "–",
+             f"{gov_state['days']}일 경과" if gov_state.get("days") is not None else ""),
+            ("최근 움직임", str(pd.Timestamp(gov_state["last"]).date()),
+             gov_state["last_event"]),
+        ])
+        table(gv.view(gov), column_config={
+            "원문": st.column_config.LinkColumn("원문", display_text="공시"),
+            "": st.column_config.TextColumn("", width="small")})
+        with st.expander("각 사건의 내용"):
+            for row in gov.itertuples():
+                st.markdown(f"**{row.date.date()} · {row.actor} — {row.event}**")
+                st.caption(row.detail)
+        st.divider()
+
     for card in fd.reference_cards(m):
         with st.expander(f"{th.STATUS_ICON[card['status']]}  {card['axis']} — {card['headline']}"):
             st.caption(f"**왜 내렸나** — {card.get('demoted', '')}")

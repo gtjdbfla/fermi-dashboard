@@ -29,6 +29,12 @@ import diskcache as dc
 SEEN_CACHE = "alerts_seen"
 SEEN_MAX_AGE = 86400 * 3650      # 사실상 만료 없음. 중복 발송을 막는 것이 목적이다.
 SEEN_KEEP = 400                  # 무한정 쌓이지 않게 최근 것만 남긴다.
+# 이보다 오래된 사건은 기록만 하고 보내지 않는다.
+#
+# 감지기를 새로 붙일 때마다 그 감지기가 보는 과거 공시가 전부 '처음 보는 것'이 되어 한꺼번에
+# 터진다. 경영권 분쟁 감지를 붙였을 때 실제로 9건이 대기했다. 석 달 전 공시를 지금 알림으로
+# 받아봐야 쓸모도 없다.
+MAX_EVENT_AGE_DAYS = 14
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "")
 TIMEOUT = 15
 
@@ -120,6 +126,32 @@ def _kind(text: str) -> str:
     if finance:
         return "자금조달"
     return "확인 필요"
+
+
+def proxy_events(filings: pd.DataFrame, known: set | None = None) -> list[dict]:
+    """경쟁 위임장 서식이 새로 뜨면 알린다 — 분쟁 재개 신호다.
+
+    2026-07-03 철회는 종결이 아니라 판사 기피로 인한 보류였고, 창업자측은 재개할 수 있다고
+    명시했다. 재개하면 이 서식들이 먼저 나온다. DFAN14A(권유 보조자료)는 두 달에 47건이라
+    빼고 반대측·경쟁 서식만 본다.
+    """
+    import governance as gv
+    contested = gv.contested_filings(filings)
+    if contested is None or contested.empty:
+        return []
+    known = known or set()
+    events = []
+    for row in contested.itertuples():
+        event_id = f"proxy:{row.accn}"
+        if event_id in known:
+            continue
+        events.append({
+            "id": event_id, "tier": "위임장", "kind": "경영권 분쟁",
+            "when": str(pd.Timestamp(row.filed).date()),
+            "form": row.form, "items": "", "excerpt": "",
+            "title": row.title or row.form, "url": row.url,
+        })
+    return events
 
 
 def filing_events(filings: pd.DataFrame, read_text=None, known: set | None = None) -> list[dict]:
@@ -348,6 +380,12 @@ def compose(event: dict, m: dict) -> str:
                  f"<i>{_escape(event['title'])}</i>"]
         if event.get("excerpt"):
             lines += ["", f"<blockquote>{_escape(event['excerpt'])}</blockquote>"]
+    elif event["tier"] == "위임장":
+        lines = [f"⚖️ <b>경영권 분쟁 — 새 위임장 공시</b>", "",
+                 f"{_escape(event['when'])} · {_escape(event['form'])}",
+                 f"<i>{_escape(event['title'])}</i>", "",
+                 "경쟁 위임장 서식이 새로 접수됐다. 2026-07-03 철회는 판사 기피에 따른 "
+                 "보류였고 소송은 진행 중이므로, <b>권유 재개일 수 있다.</b>"]
     elif event["tier"] == "테넌트":
         lines = [f"🚨 <b>테넌트 악재 — {_escape(event['kind'])}</b>", "",
                  f"{_escape(event['when'])} · {_escape(event.get('source', ''))}",
@@ -382,6 +420,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
 
     # 첫 실행에는 어차피 보내지 않으므로 원문을 받지 않는다.
     events = (filing_events(filings, read_text=None if first_run else read_text, known=known)
+              + proxy_events(filings, known=known)
               + news_events(articles)
               + tenant_events())
 
@@ -393,7 +432,15 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
     current = snapshot(m, steps_done)
     changes = state_events(current, store.get("snapshot") or {})
 
-    fresh = [event for event in events if event["id"] not in known]
+    # 오래된 건 기록만 하고 넘어간다(위 MAX_EVENT_AGE_DAYS 설명 참고).
+    cutoff = pd.Timestamp.today().normalize() - pd.Timedelta(days=MAX_EVENT_AGE_DAYS)
+    fresh, aged_ids = [], []
+    for event in events:
+        if event["id"] in known:
+            continue
+        when = pd.to_datetime(event.get("when"), errors="coerce")
+        (aged_ids.append(event["id"]) if pd.notna(when) and when < cutoff
+         else fresh.append(event))
     fresh_changes = [event for event in changes if event["id"] not in known]
 
     if first_run:
@@ -412,7 +459,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
 
     if not (fresh or fresh_changes):
         store["snapshot"] = current          # 바뀐 게 없으니 그대로 밀어도 잃을 알림이 없다
-        _remember(store, [], first_run_done=True)
+        _remember(store, aged_ids, first_run_done=True)
         return {"sent": 0, "skipped": len(events), "seeded": False, "error": ""}
 
     sent, failures, changes_failed = [], [], False
@@ -435,7 +482,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
         store["snapshot"] = current
     store["last_sent"] = pd.Timestamp.now(tz="UTC").isoformat() if sent else store.get("last_sent")
     # 실패한 건은 기억하지 않는다. 다음 크론에서 다시 시도한다.
-    _remember(store, sent, first_run_done=True)
+    _remember(store, sent + aged_ids, first_run_done=True)
     return {"sent": len(sent), "skipped": len(events) - len(fresh), "seeded": False,
             "error": "; ".join(failures[:3])}
 
