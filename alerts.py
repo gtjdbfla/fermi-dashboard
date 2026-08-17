@@ -18,6 +18,8 @@
 import html
 import os
 import re
+from pathlib import Path
+from xml.etree import ElementTree
 
 import pandas as pd
 import requests
@@ -101,7 +103,10 @@ def _remember(store: dict, ids, first_run_done: bool = True) -> None:
         sent = dict(sorted(sent.items(), key=lambda kv: kv[1])[-SEEN_KEEP:])
     dc.save_json(SEEN_CACHE, {"ids": sent, "initialized": first_run_done,
                               "last_check": stamp,
-                              "last_sent": store.get("last_sent")})
+                              "last_sent": store.get("last_sent"),
+                              # 스냅샷을 빠뜨리면 매 실행이 '이전 값 없음'이 되어
+                              # 분기 실적 변화를 영원히 못 잡는다.
+                              "snapshot": store.get("snapshot")})
 
 
 # ── 감지 ──────────────────────────────────────────────────────────────────────
@@ -176,6 +181,142 @@ def news_events(articles: pd.DataFrame) -> list[dict]:
     return events
 
 
+# ── 테넌트 신용 ───────────────────────────────────────────────────────────────
+# 고객이 1곳뿐이라 그 1곳이 무너지면 커버리지가 15%에서 0%가 된다. NuScale이 UAMPS 하나를
+# 잃고 -82%가 된 것과 같은 구조다. 테넌트는 비상장이라 SEC 공시가 없어 뉴스로만 잡힌다.
+# 놓치는 비용이 헛알림보다 훨씬 크므로 넓게 잡는다. 테넌트 파산을 놓치면 커버리지가
+# 0이 된 걸 뒤늦게 아는 것이고, 헛알림은 메시지 한 통이다.
+TENANT_TROUBLE = r"(bankrupt|chapter\s*11|insolven|receivership|default|" \
+                 r"miss(es|ed)?\s+(a\s+)?payment|delinquen|" \
+                 r"restructur|layoff|job\s+cuts|cuts?\s+staff|furlough|" \
+                 r"lawsuit|sue[sd]?\b|fraud|investigat|subpoena|probe|downgrade|" \
+                 r"going\s+concern|shut\s*(down|ting)|wind[\s-]?down|halt|" \
+                 r"funding\s+(trouble|crunch|gap|shortfall)|cash\s+(crunch|burn)|" \
+                 r"fail(s|ed)?\s+to\s+raise|scrap(s|ped)?|pull(s|ed)?\s+out|terminat|" \
+                 r"파산|회생|디폴트|구조조정|감원|소송|자금난)"
+
+
+def tenants() -> list[str]:
+    """contracts.csv에 서명된 고객 이름. 감시 대상은 대시보드가 계약으로 인정한 곳뿐이다."""
+    path = Path(__file__).parent / "data" / "contracts.csv"
+    if not path.exists():
+        return []
+    try:
+        frame = pd.read_csv(path)
+    except Exception:
+        return []
+    if "customer" not in frame.columns:
+        return []
+    if "binding" in frame.columns:
+        frame = frame[frame["binding"].astype(str).str.upper().str.startswith("Y")]
+    return [str(name).strip() for name in frame["customer"].dropna().unique() if str(name).strip()]
+
+
+def tenant_events(names: list[str] | None = None) -> list[dict]:
+    """테넌트 이름 + 악재 단어가 함께 걸린 기사만. 평범한 테넌트 소식은 보내지 않는다."""
+    names = names if names is not None else tenants()
+    events = []
+    for name in names:
+        try:
+            response = requests.get(
+                "https://news.google.com/rss/search",
+                params={"q": f'"{name}"', "hl": "en-US", "gl": "US", "ceid": "US:en"},
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUT)
+            root = ElementTree.fromstring(response.content)
+        except Exception:
+            continue
+        for item in root.findall(".//item"):
+            title = html.unescape(item.findtext("title") or "")
+            source = item.findtext("{http://search.yahoo.com/mrss/}source") or ""
+            if not source and " - " in title:
+                title, source = title.rsplit(" - ", 1)
+            lowered = title.lower()
+            if name.lower() not in lowered or not re.search(TENANT_TROUBLE, lowered):
+                continue
+            key = re.sub(r"[^a-z0-9가-힣]", "", lowered)[:70]
+            events.append({
+                "id": f"tenant:{key}",
+                "tier": "테넌트",
+                "kind": name,
+                "when": str(pd.to_datetime(item.findtext("pubDate"), errors="coerce",
+                                           utc=True).date()),
+                "form": "", "items": "", "excerpt": "",
+                "title": title.strip(),
+                "url": item.findtext("link") or "",
+                "source": source.strip() or "Google News",
+            })
+    return events
+
+
+# ── 상태 변화(분기 실적) ──────────────────────────────────────────────────────
+def snapshot(m: dict, steps_done: int | None = None) -> dict:
+    """판정을 바꾸는 값만 추린다. 이 값들이 움직였을 때가 곧 판정이 움직인 때다."""
+    return {
+        "asof": str(pd.Timestamp(m["asof"]).date()) if m.get("asof") is not None else None,
+        "revenue_q": m.get("revenue_q"),
+        "op_cf_q": m.get("op_cf_q"),
+        "mw_contracted": m.get("mw_contracted"),
+        "customer_count": m.get("customer_count"),
+        "steps_done": steps_done,
+    }
+
+
+def _crossed_up(before, after) -> bool:
+    """0 이하에서 0 초과로 올라섰는가. None은 '아직 없음'으로 본다."""
+    return (after or 0) > 0 and (before or 0) <= 0
+
+
+def state_events(current: dict, previous: dict) -> list[dict]:
+    """분기 실적이 반영됐거나 로드맵 단계가 움직였을 때."""
+    if not previous:
+        return []
+    events = []
+
+    if _crossed_up(previous.get("revenue_q"), current.get("revenue_q")):
+        events.append({"id": f"state:revenue:{current['asof']}", "kind": "첫 매출 인식",
+                       "detail": f"분기 매출 ${(current['revenue_q'] or 0)/1e6:,.1f}M — "
+                                 f"로드맵 4단계. 매출 0이 페르미를 NextDecade와 같은 자리에 "
+                                 f"두고 있었다."})
+
+    if _crossed_up(previous.get("op_cf_q"), current.get("op_cf_q")):
+        events.append({"id": f"state:opcf:{current['asof']}", "kind": "영업현금흐름 흑자 전환",
+                       "detail": f"분기 영업CF ${(current['op_cf_q'] or 0)/1e6:+,.1f}M — "
+                                 f"로드맵 5단계. 검증 표본에서 유지 6곳은 전부 도달했고 "
+                                 f"붕괴 4곳은 전부 실패한 지점이다."})
+
+    before_steps, after_steps = previous.get("steps_done"), current.get("steps_done")
+    if before_steps is not None and after_steps is not None and after_steps != before_steps:
+        direction = "달성" if after_steps > before_steps else "후퇴"
+        events.append({"id": f"state:steps:{after_steps}:{current['asof']}",
+                       "kind": f"로드맵 {after_steps}/5단계 {direction}",
+                       "detail": f"이전 {before_steps}/5에서 바뀌었다."})
+
+    if previous.get("asof") and current.get("asof") != previous.get("asof"):
+        events.append({"id": f"state:quarter:{current['asof']}", "kind": "분기 실적 반영",
+                       "detail": f"재무 기준일 {previous['asof']} → {current['asof']}. "
+                                 f"핵심 판정이 새 수치로 다시 계산됐다."})
+    return events
+
+
+def status_icon(status: str) -> str:
+    """화면과 같은 아이콘을 쓴다. 여기서 따로 매핑을 만들었다가 대시보드가 🔴인 항목을
+    알림이 ⚪로 보내는 어긋남이 났다."""
+    import theme as th
+    return th.STATUS_ICON.get(status, "⚪")
+
+
+def compose_state(event: dict, m: dict, verdicts: list[dict]) -> str:
+    lines = [f"📊 <b>{_escape(event['kind'])}</b>", "", _escape(event["detail"]), "",
+             "<b>핵심 판정</b>"]
+    for item in verdicts:
+        lines.append(f"{status_icon(item.get('status'))} {_escape(item['label'])} — "
+                     f"{_escape(item['value'])}")
+        lines.append(f"    <i>{_escape(item['verdict'])}</i>")
+    if DASHBOARD_URL:
+        lines.append(f'\n<a href="{_escape(DASHBOARD_URL)}">대시보드</a>')
+    return "\n".join(lines)
+
+
 # ── 메시지 ────────────────────────────────────────────────────────────────────
 def _escape(text: str) -> str:
     return html.escape(str(text or ""))
@@ -194,6 +335,12 @@ def compose(event: dict, m: dict) -> str:
                  f"<i>{_escape(event['title'])}</i>"]
         if event.get("excerpt"):
             lines += ["", f"<blockquote>{_escape(event['excerpt'])}</blockquote>"]
+    elif event["tier"] == "테넌트":
+        lines = [f"🚨 <b>테넌트 악재 — {_escape(event['kind'])}</b>", "",
+                 f"{_escape(event['when'])} · {_escape(event.get('source', ''))}",
+                 f"<i>{_escape(event['title'])}</i>", "",
+                 f"{_escape(event['kind'])}는 현재 <b>유일한 고객</b>이다. "
+                 f"이 회사가 계약을 이행하지 못하면 커버리지가 0이 된다."]
     else:
         nonbinding = event["kind"].startswith("비구속")
         head = f"{'⚪' if nonbinding else icon} <b>뉴스 — {_escape(event['kind'])}</b>"
@@ -214,7 +361,7 @@ def compose(event: dict, m: dict) -> str:
 
 # ── 실행 ──────────────────────────────────────────────────────────────────────
 def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
-          read_text=None) -> dict:
+          read_text=None, verdicts=None, steps_done=None) -> dict:
     """새 사건을 찾아 보낸다. {sent, skipped, error, seeded}."""
     store = _seen()
     known = set((store.get("ids") or {}).keys())
@@ -222,26 +369,41 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
 
     # 첫 실행에는 어차피 보내지 않으므로 원문을 받지 않는다.
     events = (filing_events(filings, read_text=None if first_run else read_text, known=known)
-              + news_events(articles))
+              + news_events(articles)
+              + tenant_events())
+
+    # 상태 변화는 지문이 아니라 이전 값과의 비교로 잡는다. 스냅샷은 항상 갱신한다.
+    current = snapshot(m, steps_done)
+    changes = state_events(current, store.get("snapshot") or {})
+    store["snapshot"] = current
+
     fresh = [event for event in events if event["id"] not in known]
+    fresh_changes = [event for event in changes if event["id"] not in known]
 
     if first_run:
         # 과거 것을 몰아 보내지 않는다. 지금 상태를 기준선으로 삼는다.
         _remember(store, [event["id"] for event in events], first_run_done=True)
         ok, error = send(
             "✅ <b>페르미 알림 켜짐</b>\n\n"
-            f"감시 중: 8-K Item {' / '.join(WATCHED_ITEMS)} · 계약 키워드 기사\n"
+            f"감시 중: 8-K Item {' / '.join(WATCHED_ITEMS)} · 계약 키워드 기사 · "
+            f"테넌트({', '.join(tenants()) or '없음'}) 악재 · 분기 실적 판정\n"
             f"현재 기록: <b>{(m.get('mw_contracted') or 0):,.0f} MW · "
             f"고객 {m.get('customer_count') or 0}곳</b>\n\n"
             f"기존 {len(events)}건은 기준선으로 처리했다. 다음 신규 건부터 알린다.")
         return {"sent": 0, "skipped": len(events), "seeded": True,
                 "error": "" if ok else error}
 
-    if not fresh:
+    if not (fresh or fresh_changes):
         _remember(store, [], first_run_done=True)
         return {"sent": 0, "skipped": len(events), "seeded": False, "error": ""}
 
     sent, failures = [], []
+    for event in fresh_changes:
+        ok, error = send(compose_state(event, m, verdicts or []))
+        if ok:
+            sent.append(event["id"])
+        else:
+            failures.append(error)
     for event in fresh:
         ok, error = send(compose(event, m))
         if ok:

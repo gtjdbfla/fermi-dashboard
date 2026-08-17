@@ -86,8 +86,13 @@ def notify(m, articles) -> None:
         return
     try:
         import filing_review as fr
+        import roadmap as rm
         import sec_edgar as sec
-        result = alerts.check(m, articles, raw(sec.load_filings)(), read_text=fr._text)
+        import sector as sc
+        steps = rm.evaluate(m)
+        result = alerts.check(m, articles, raw(sec.load_filings)(), read_text=fr._text,
+                              verdicts=sc.fermi_position(m),
+                              steps_done=rm.progress(steps).get("done"))
     except Exception as error:
         print(f"[warn] 알림 실패: {type(error).__name__}: {error}")
         return
