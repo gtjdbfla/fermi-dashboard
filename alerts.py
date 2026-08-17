@@ -288,3 +288,29 @@ def status() -> dict:
         "last_sent": store.get("last_sent"),
         "age": dc.age_seconds(SEEN_CACHE),
     }
+
+
+def chat_id() -> str:
+    """봇에게 아무 메시지나 보낸 뒤 이걸 실행하면 chat_id가 나온다.
+
+    직접 getUpdates를 읽어 눈으로 찾는 과정을 줄인다. 토큰만 .env에 있으면 된다.
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not token:
+        return "TELEGRAM_BOT_TOKEN이 없다"
+    try:
+        payload = requests.get(f"https://api.telegram.org/bot{token}/getUpdates",
+                               timeout=TIMEOUT).json()
+    except Exception as error:
+        return f"{type(error).__name__}: {error}"
+    if not payload.get("ok"):
+        return f"토큰이 거부됐다: {payload.get('description')}"
+    for update in reversed(payload.get("result") or []):
+        chat = ((update.get("message") or update.get("channel_post") or {}).get("chat") or {})
+        if chat.get("id"):
+            return str(chat["id"])
+    return "메시지가 없다 — 텔레그램에서 봇에게 아무 말이나 보낸 뒤 다시 실행해라"
+
+
+if __name__ == "__main__":
+    print(chat_id())
