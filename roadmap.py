@@ -40,12 +40,14 @@ def _measure(metric: str, m: dict) -> tuple[float | None, str]:
         value = m.get("mw_operating")
         return value, (f"가동 {value:,.0f}MW" if value is not None else "산출 불가")
     if metric == "revenue":
-        # 매출 태그가 XBRL에 아예 없으면 pre-revenue라는 뜻이다.
-        return 0.0, "매출 없음"
+        # 매출 태그가 XBRL에 아예 없으면 pre-revenue라는 뜻이라 0으로 본다.
+        # 예전에는 0을 하드코딩해서 실제로 매출이 잡혀도 이 단계가 넘어가지 않았다.
+        value = m.get("revenue_q") or 0.0
+        return value, (f"분기 매출 ${value/1e6:,.1f}M" if value else "매출 없음")
     if metric == "op_cf":
-        burn = m.get("op_burn_q")
-        return (-burn if burn is not None else None,
-                f"분기 영업CF -${burn/1e6:,.1f}M" if burn is not None else "산출 불가")
+        # 부호 있는 값을 써야 흑자 전환을 감지한다. op_burn_q는 크기만 담는다.
+        value = m.get("op_cf_q")
+        return value, (f"분기 영업CF ${value/1e6:+,.1f}M" if value is not None else "산출 불가")
     return None, "–"
 
 

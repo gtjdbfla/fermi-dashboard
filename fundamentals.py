@@ -28,6 +28,9 @@ DATA_DIR = Path(__file__).parent / "data"
 TAG_CASH_TOTAL = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
 TAG_CASH = "CashAndCashEquivalentsAtCarryingValue"
 TAG_OP_CF = "NetCashProvidedByUsedInOperatingActivities"
+# 지금은 XBRL에 매출 태그가 아예 없다(pre-revenue). 첫 매출이 잡히면 이 중 하나로 들어온다.
+TAG_REVENUE = "Revenues"
+TAG_REVENUE_ALT = "RevenueFromContractWithCustomerExcludingAssessedTax"
 TAG_FIN_CF = "NetCashProvidedByUsedInFinancingActivities"
 TAG_CAPEX = "PaymentsToAcquirePropertyPlantAndEquipment"
 TAG_PPE_GROSS = "PropertyPlantAndEquipmentGross"
@@ -286,7 +289,17 @@ def compute(facts: dict, price_meta: dict) -> dict:
     op_cf = quarterly(facts, TAG_OP_CF)
     metrics["op_cf_series"] = op_cf
     op_latest = latest_quarter_value(op_cf)
+    # 부호 있는 값과 크기를 나눠 담는다. 런웨이 계산에는 크기가 필요하지만, 흑자 전환 판정에는
+    # 부호가 필요하다. 예전에는 abs()만 담아서 영업CF가 흑자로 돌아도 로드맵 5단계가
+    # 영원히 '대기'로 남았다.
+    metrics["op_cf_q"] = op_latest
     metrics["op_burn_q"] = abs(op_latest) if op_latest is not None else None
+
+    revenue = quarterly(facts, TAG_REVENUE)
+    if revenue.empty:
+        revenue = quarterly(facts, TAG_REVENUE_ALT)
+    metrics["revenue_series"] = revenue
+    metrics["revenue_q"] = latest_quarter_value(revenue)
 
     capex = quarterly(facts, TAG_CAPEX)
     capex_full = append_manual(capex, metrics["manual_asof"], manual.get("capex_quarter"))

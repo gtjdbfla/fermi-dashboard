@@ -289,8 +289,9 @@ with tabs[1]:
         "**매출의 유무가 아니라 매출이 현금을 만드는가**가 갈랐다 — Core Scientific은 매출 $640M을 "
         "내면서 파산했다."))
     metric_row([
-        ("현재 매출", "$0", "pre-revenue 개발단계"),
-        ("분기 영업현금흐름", fd.usd(-(m.get("op_burn_q") or 0)), "최근 분기"),
+        ("현재 매출", fd.usd(m.get("revenue_q")) if m.get("revenue_q") else "$0",
+         "XBRL 매출 태그 기준. 태그가 없으면 pre-revenue다"),
+        ("분기 영업현금흐름", fd.usd(m.get("op_cf_q")), "최근 분기 · 부호 그대로"),
         ("T0 이후 경과", "1년차", "대규모 자본 투입 시작(2025) 기준"),
         ("첫 상업 전력 목표", "약 200MW", "회사 발표 기준"),
     ])

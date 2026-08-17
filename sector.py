@@ -307,11 +307,19 @@ def fermi_position(m: dict) -> list[dict]:
                   "페르미는 T0+1년차라 어느 쪽으로도 판정할 수 없다.")
     else:
         detail = "페르미는 T0+1년차라 어느 쪽으로도 판정할 수 없다."
+    # 매출과 영업현금흐름은 실제 값에서 읽는다. 문구에 박아두면 첫 매출이 잡힌 뒤에도
+    # "매출 0"이라고 계속 표시된다.
+    revenue_q, op_cf_q = m.get("revenue_q"), m.get("op_cf_q")
+    if op_cf_q is not None and op_cf_q > 0:
+        status, verdict = "good", "충족 — 영업현금흐름 흑자"
+    else:
+        status, verdict = "info", "판정 불가 구간"
+    value = f"T0+1년차 · 매출 {'$%.0fM' % (revenue_q / 1e6) if revenue_q else '0'}"
     items.append({
         "label": "③ 영업현금흐름 전환",
-        "status": "info",
-        "value": "T0+1년차 · 매출 0",
+        "status": status,
+        "value": value,
         "detail": detail,
-        "verdict": "판정 불가 구간",
+        "verdict": verdict,
     })
     return items
