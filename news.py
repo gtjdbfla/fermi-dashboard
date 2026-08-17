@@ -9,15 +9,29 @@
 
 import html
 import re
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from xml.etree import ElementTree
 
 import pandas as pd
 import requests
 import streamlit as st
 
+# 화면은 이 파일만 읽는다. 채우는 일은 크론이 refresh_news.py로 미리 해 둔다.
+# Streamlit은 어느 탭을 보든 모든 탭 코드를 실행하므로, 여기서 직접 HTTP를 치면
+# 뉴스 탭을 안 보는 사람도 그 시간을 문다. 실측 6초였다.
+CACHE_DIR = Path(__file__).parent / "data" / ".cache"
+ARTICLES_CACHE = CACHE_DIR / "articles.json"
+COMMUNITY_CACHE = CACHE_DIR / "community.json"
+
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 Chrome/120.0 Safari/537.36"}
 JSON_UA = {**UA, "Accept": "application/json"}
+# 소스별 실측: Google 1.9초, Yahoo 0.8초, Nasdaq 4.7초, Stocktwits 0.7초.
+# 순차로 부르면 8초가 그대로 쌓이고, Streamlit은 어느 탭을 보든 모든 탭 코드를 실행하므로
+# 그 8초를 매번 문다. 병렬로 부르면 가장 느린 하나(약 4.7초)로 줄어든다.
+TIMEOUT = 8
+SLOW_TIMEOUT = 12
 
 # 제목에 이 단어가 있으면 해당 묶음으로 분류한다. 위에 있는 묶음이 우선한다.
 KEYWORD_GROUPS = [
@@ -60,7 +74,7 @@ def google_news() -> pd.DataFrame:
         try:
             response = requests.get("https://news.google.com/rss/search",
                                     params={"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
-                                    headers=UA, timeout=20)
+                                    headers=UA, timeout=TIMEOUT)
             root = ElementTree.fromstring(response.content)
         except Exception:
             continue
@@ -81,7 +95,7 @@ def yahoo_news() -> pd.DataFrame:
     try:
         response = requests.get("https://query1.finance.yahoo.com/v1/finance/search",
                                 params={"q": "FRMI", "newsCount": 20, "quotesCount": 0},
-                                headers=UA, timeout=20)
+                                headers=UA, timeout=TIMEOUT)
         items = response.json().get("news") or []
     except Exception:
         return _frame([])
@@ -97,7 +111,7 @@ def nasdaq_news() -> pd.DataFrame:
     try:
         response = requests.get("https://api.nasdaq.com/api/news/topic/articlebysymbol",
                                 params={"q": "FRMI|stocks", "offset": 0, "limit": 20},
-                                headers=JSON_UA, timeout=20)
+                                headers=JSON_UA, timeout=SLOW_TIMEOUT)
         rows = ((response.json().get("data") or {}).get("rows")) or []
     except Exception:
         return _frame([])
@@ -108,10 +122,13 @@ def nasdaq_news() -> pd.DataFrame:
     } for row in rows])
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def collect() -> pd.DataFrame:
-    """세 소스를 합치고 같은 기사를 하나로 줄인다."""
-    frame = pd.concat([google_news(), yahoo_news(), nasdaq_news()], ignore_index=True)
+    """세 소스를 병렬로 받아 합치고 같은 기사를 하나로 줄인다."""
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        parts = [future.result() for future in
+                 [pool.submit(google_news), pool.submit(yahoo_news), pool.submit(nasdaq_news)]]
+    frame = pd.concat(parts, ignore_index=True)
     if frame.empty:
         return frame
     frame = frame.dropna(subset=["title"])
@@ -124,23 +141,27 @@ def collect() -> pd.DataFrame:
     return frame.sort_values(["priority", "published"], ascending=[True, False]).reset_index(drop=True)
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def community() -> pd.DataFrame:
     """Stocktwits 종목 게시글. 검증되지 않은 추측이 섞이므로 화면에서도 그렇게 표시한다."""
     try:
         response = requests.get("https://api.stocktwits.com/api/2/streams/symbol/FRMI.json",
-                                headers=UA, timeout=20)
+                                headers=UA, timeout=TIMEOUT)
         messages = response.json().get("messages") or []
     except Exception:
         return pd.DataFrame(columns=["published", "body", "user", "url", "group"])
     records = []
     for message in messages:
         body = html.unescape(re.sub(r"\s+", " ", message.get("body", ""))).strip()
+        username = (message.get("user") or {}).get("username", "")
+        # 개별 글 주소에는 작성자 아이디가 들어간다. /message/{id}만 쓰면 404가 뜬다.
+        link = (f"https://stocktwits.com/{username}/message/{message['id']}"
+                if message.get("id") and username else "https://stocktwits.com/symbol/FRMI")
         records.append({
             "published": pd.to_datetime(message.get("created_at"), errors="coerce", utc=True),
             "body": body,
-            "user": (message.get("user") or {}).get("username", ""),
-            "url": f"https://stocktwits.com/message/{message.get('id')}" if message.get("id") else "",
+            "user": username,
+            "url": link,
             "group": classify(body),
         })
     frame = pd.DataFrame(records)
@@ -150,3 +171,40 @@ def community() -> pd.DataFrame:
 def contract_hits(frame: pd.DataFrame) -> pd.DataFrame:
     """계약·테넌트로 분류된 것만. 핵심 판정 ①을 바꿀 수 있는 소식이다."""
     return frame[frame["group"] == "계약·테넌트"] if not frame.empty else frame
+
+
+# ── 디스크 캐시 ───────────────────────────────────────────────────────────────
+def save_cache(articles: pd.DataFrame, chatter: pd.DataFrame) -> None:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    articles.to_json(ARTICLES_CACHE, orient="records", date_format="iso", force_ascii=False)
+    chatter.to_json(COMMUNITY_CACHE, orient="records", date_format="iso", force_ascii=False)
+
+
+def _load(path: Path, columns: list[str]) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame(columns=columns)
+    try:
+        frame = pd.read_json(path, orient="records", convert_dates=["published"])
+    except Exception:
+        return pd.DataFrame(columns=columns)
+    if "published" in frame.columns and not frame.empty:
+        frame["published"] = pd.to_datetime(frame["published"], errors="coerce", utc=True)
+    return frame
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_articles() -> pd.DataFrame:
+    return _load(ARTICLES_CACHE, ["published", "title", "source", "url", "group", "priority"])
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_community() -> pd.DataFrame:
+    return _load(COMMUNITY_CACHE, ["published", "body", "user", "url", "group"])
+
+
+def cache_age() -> pd.Timedelta | None:
+    """캐시가 얼마나 묵었는지. 크론이 멈추면 화면에서 바로 드러나야 한다."""
+    if not ARTICLES_CACHE.exists():
+        return None
+    stamp = pd.Timestamp(ARTICLES_CACHE.stat().st_mtime, unit="s", tz="UTC")
+    return pd.Timestamp.now(tz="UTC") - stamp

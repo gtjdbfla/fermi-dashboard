@@ -9,7 +9,9 @@
 """
 
 import hashlib
+import json
 import os
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -17,6 +19,32 @@ import streamlit as st
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 MAX_ARTICLES = 40
 MAX_POSTS = 20
+
+# 결과를 디스크에도 남긴다. st.cache_data는 프로세스 메모리라 컨테이너를 다시 세우면 날아가고,
+# 그러면 배포할 때마다 첫 접속자가 API 응답을 기다린다. data/는 볼륨이라 재기동을 견딘다.
+CACHE_DIR = Path(__file__).parent / "data" / ".cache"
+CACHE_FILE = CACHE_DIR / "ai_review.json"
+CACHE_KEEP = 5
+
+
+def _read_cache() -> dict:
+    try:
+        return json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_cache(key: str, text: str) -> None:
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        store = _read_cache()
+        store[key] = text
+        # 최근 것 몇 개만 남긴다. 지문이 바뀔 때마다 쌓이면 파일이 계속 커진다.
+        for stale in list(store)[:-CACHE_KEEP]:
+            store.pop(stale, None)
+        CACHE_FILE.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def available() -> bool:
@@ -89,18 +117,24 @@ def _prompt(payload: str, facts: dict) -> str:
 - 목표주가나 주가 전망을 제시하지 마라."""
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def analyze(fingerprint_key: str, payload: str, facts: dict) -> tuple[str, str]:
-    """(분석 텍스트, 오류) — 지문이 같으면 캐시가 재사용된다."""
+    """(분석 텍스트, 오류) — 지문이 같으면 디스크 캐시에서 바로 돌려준다."""
+    cached = _read_cache().get(fingerprint_key)
+    if cached:
+        return cached, ""
     if not available():
         return "", "GEMINI_API_KEY가 설정되지 않았다."
     try:
         from google import genai
         client = genai.Client()
         interaction = client.interactions.create(model=MODEL, input=_prompt(payload, facts))
-        return (interaction.output_text or "").strip(), ""
+        text = (interaction.output_text or "").strip()
     except Exception as error:
         return "", f"{type(error).__name__}: {error}"
+    if text:
+        _write_cache(fingerprint_key, text)
+    return text, ""
 
 
 def run(articles: pd.DataFrame, chatter: pd.DataFrame, m: dict) -> tuple[str, str, str]:

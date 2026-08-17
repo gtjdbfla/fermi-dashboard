@@ -647,23 +647,34 @@ with tabs[5]:
         "계약 MW 숫자는 8-K를 근거로만 갱신된다."
     )
 
-    with st.spinner("뉴스 불러오는 중..."):
-        articles = nw.collect()
-        chatter = nw.community()
+    # 화면은 디스크 캐시만 읽는다. 채우는 일은 크론이 refresh_news.py로 미리 한다.
+    articles, chatter = nw.cached_articles(), nw.cached_community()
+    age = nw.cache_age()
+    if age is not None:
+        minutes = int(age.total_seconds() // 60)
+        note = f"마지막 수집 {minutes}분 전"
+        if minutes > 90:
+            st.warning(f"{note} — 수집 크론이 멈췄을 수 있다. "
+                       "`docker compose exec -T fermi-dashboard python refresh_news.py`로 확인.", icon="⏳")
+        else:
+            st.caption(f"🕒 {note} · 30분마다 서버 크론이 갱신한다")
 
     if articles.empty:
-        st.warning("뉴스를 불러오지 못했다. 잠시 후 다시 시도하면 된다.", icon="⚠️")
+        st.warning(
+            "아직 수집된 뉴스가 없다. 서버에서 한 번 채워 주면 이후로는 크론이 유지한다 — "
+            "`docker compose exec -T fermi-dashboard python refresh_news.py`",
+            icon="⚠️",
+        )
     else:
         st.markdown("##### 🤖 AI 정리")
-        with st.spinner("뉴스 분석 중..."):
-            review, review_error, review_key = ai_review.run(articles, chatter, m)
+        review, review_error, review_key = ai_review.run(articles, chatter, m)
         if review:
             with st.container(border=True):
                 st.markdown(review)
             st.caption(
                 f"모델 {ai_review.MODEL} · 기사 {min(len(articles), ai_review.MAX_ARTICLES)}건 + "
                 f"커뮤니티 {min(len(chatter), ai_review.MAX_POSTS)}건 기준 · 지문 `{review_key}`. "
-                "**새 기사가 뜨면 지문이 바뀌어 자동으로 다시 분석한다.** 뉴스가 그대로면 같은 결과를 "
+                "**새 기사가 뜨면 지문이 바뀌어 크론이 다시 분석한다.** 뉴스가 그대로면 같은 결과를 "
                 "재사용해 API를 다시 부르지 않는다."
             )
             st.warning(
@@ -673,7 +684,10 @@ with tabs[5]:
                 icon="🤖",
             )
         elif review_error:
-            st.info(f"AI 정리를 만들지 못했다 — {review_error}", icon="🤖")
+            st.info(
+                f"AI 정리가 아직 없다 — {review_error}. 새 기사가 들어오면 다음 크론에서 만들어진다.",
+                icon="🤖",
+            )
         st.divider()
         hits = nw.contract_hits(articles)
         counts = articles["group"].value_counts()
@@ -729,6 +743,11 @@ with tabs[5]:
         "'수동 데이터가 낡았을 수 있습니다'로 바뀐다. 월요일 09:00 클라우드 루틴이 그 8-K를 읽고 "
         "`data/contracts.csv`를 직접 고쳐 커밋한다. 뉴스는 그보다 먼저 알아채는 용도다.",
         icon="📋",
+    )
+    st.caption(
+        "이 탭은 서버 크론이 30분마다 채워 둔 파일만 읽는다. 화면에서 직접 받으면 Nasdaq 응답이 "
+        "5초 가까이 걸리는데, Streamlit은 어느 탭을 보든 모든 탭 코드를 실행해서 뉴스 탭을 안 보는 "
+        "사람까지 그 시간을 물게 된다."
     )
 
 
