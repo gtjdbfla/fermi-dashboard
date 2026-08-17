@@ -128,7 +128,7 @@ def _kind(text: str) -> str:
     return "확인 필요"
 
 
-def proxy_events(filings: pd.DataFrame, known: set | None = None) -> list[dict]:
+def proxy_events(filings: pd.DataFrame) -> list[dict]:
     """경쟁 위임장 서식이 새로 뜨면 알린다 — 분쟁 재개 신호다.
 
     2026-07-03 철회는 종결이 아니라 판사 기피로 인한 보류였고, 창업자측은 재개할 수 있다고
@@ -139,14 +139,12 @@ def proxy_events(filings: pd.DataFrame, known: set | None = None) -> list[dict]:
     contested = gv.contested_filings(filings)
     if contested is None or contested.empty:
         return []
-    known = known or set()
     events = []
     for row in contested.itertuples():
-        event_id = f"proxy:{row.accn}"
-        if event_id in known:
-            continue
+        # 중복·오래된 건 거르는 일은 check()가 한다. 여기서 미리 빼면 '감시 N건' 숫자가
+        # 실행마다 달라져 읽는 사람이 헷갈린다.
         events.append({
-            "id": event_id, "tier": "위임장", "kind": "경영권 분쟁",
+            "id": f"proxy:{row.accn}", "tier": "위임장", "kind": "경영권 분쟁",
             "when": str(pd.Timestamp(row.filed).date()),
             "form": row.form, "items": "", "excerpt": "",
             "title": row.title or row.form, "url": row.url,
@@ -420,7 +418,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
 
     # 첫 실행에는 어차피 보내지 않으므로 원문을 받지 않는다.
     events = (filing_events(filings, read_text=None if first_run else read_text, known=known)
-              + proxy_events(filings, known=known)
+              + proxy_events(filings)
               + news_events(articles)
               + tenant_events())
 
