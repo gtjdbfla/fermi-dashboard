@@ -26,7 +26,6 @@ DATA_DIR = Path(__file__).parent / "data"
 
 # XBRL 태그. 한 개념을 여러 태그로 중복 보고하는 경우가 있어 후보를 순서대로 둔다.
 TAG_CASH_TOTAL = "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"
-TAG_CASH = "CashAndCashEquivalentsAtCarryingValue"
 TAG_OP_CF = "NetCashProvidedByUsedInOperatingActivities"
 # 지금은 XBRL에 매출 태그가 아예 없다(pre-revenue). 첫 매출이 잡히면 이 중 하나로 들어온다.
 TAG_REVENUE = "Revenues"
@@ -121,6 +120,11 @@ def manual_data_asof() -> pd.Timestamp | None:
         if not done.empty:
             dates.append(done.max())
     return max(dates) if dates else None
+
+
+def staleness_asof() -> pd.Timestamp | None:
+    """수동 데이터가 어디까지 반영됐는지. 신선도 표에서도 쓴다."""
+    return manual_data_asof()
 
 
 def staleness(m: dict) -> dict:

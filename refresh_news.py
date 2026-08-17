@@ -90,20 +90,12 @@ def main() -> int:
         print("[skip] GEMINI_API_KEY 없음 — AI 정리 건너뜀")
         return 0
 
-    facts = {"contracted": 0, "customers": 0, "landed": 0, "coverage": 0,
-             "target": 0, "operating": 0, "debt": "–"}
     try:
         import fundamentals as fd
         import market
         import sec_edgar as sec
         m = raw(fd.compute)(raw(sec.load_company_facts)(), raw(market.load_price)("FRMI")[1])
-        facts = {
-            "contracted": m.get("mw_contracted") or 0, "customers": m.get("customer_count") or 0,
-            "landed": m.get("mw_landed") or 0,
-            "coverage": (m.get("contracted_vs_landed") or 0) * 100,
-            "target": m.get("mw_target") or 0, "operating": m.get("mw_operating") or 0,
-            "debt": f"${(m.get('debt_proforma') or 0)/1e6:,.0f}M",
-        }
+        facts = ai_review.context(m)
     except Exception as error:
         # 확정 사실 없이 만든 정리는 전제가 틀려 쓸모가 없다. 다음 실행에서 다시 시도한다.
         print(f"[fail] 확정 사실을 못 읽었다({type(error).__name__}: {error}) — AI 정리를 건너뛴다")

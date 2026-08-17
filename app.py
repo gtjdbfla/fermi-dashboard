@@ -16,6 +16,7 @@ import streamlit as st
 
 import ai_review
 import filing_review as fr
+import freshness as fresh
 import fundamentals as fd
 import market
 import market_flow as mflow
@@ -175,6 +176,16 @@ with head_right:
         ("재무 기준일", str(pd.Timestamp(m["asof"]).date()) if m.get("asof") is not None else "–",
          f"출처: {m.get('asof_source', '–')}"),
     ])
+    m["staleness_asof"] = fd.staleness_asof()
+    with st.popover(fresh.summary_line(), icon=":material/schedule:",
+                    use_container_width=True):
+        st.markdown("**데이터별 갱신 시각**")
+        table(fresh.rows(m, price_frame))
+        st.caption(
+            "층마다 갱신 주기가 다르다. '최신 시점'은 데이터 자체의 기준일이고, '경과'는 마지막으로 "
+            "받아온 뒤 흐른 시간이다. 갱신 주기의 3배를 넘으면 ⚠️ 지연으로 표시한다 — 크론이 "
+            "조용히 멈춘 경우를 여기서 알아챈다."
+        )
 
 # ── 수동 데이터 노후화 ────────────────────────────────────────────────────────
 stale = fd.staleness(m)

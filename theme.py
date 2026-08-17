@@ -34,12 +34,8 @@ DARK = {
     "ordinal": ["#184f95", "#1c5cab", "#256abf", "#2a78d6", "#3987e5", "#5598e7", "#6da7ec", "#86b6ef"],
 }
 
-# 상태색은 두 모드에서 같은 값을 쓴다. 네 개 모두 다크 서피스에서 3:1을 넘고,
-# 라이트에서 warning/serious가 3:1 미만인 것은 아이콘+문구로 보완한다.
-STATUS = {"good": "#0ca30c", "warning": "#fab219", "serious": "#ec835a", "critical": "#d03b3b"}
+# 판정 아이콘. 색만으로 뜻을 전달하지 않도록 아이콘과 문구를 함께 쓴다.
 STATUS_ICON = {"good": "🟢", "warning": "🟡", "serious": "🟠", "critical": "🔴", "info": "⚪"}
-STATUS_TEXT = {"good": "양호", "warning": "관찰", "serious": "주의", "critical": "경고", "info": "판정보류"}
-
 FONT_FAMILY = 'system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif'
 
 
@@ -51,15 +47,6 @@ def palette() -> dict:
         mode = "light"
     return DARK if mode == "dark" else LIGHT
 
-
-# 아래 이름들은 palette()를 거치지 않고 쓰던 자리를 위해 남긴다(모듈 임포트 시점 고정값).
-def __getattr__(name: str):
-    mapping = {"SURFACE": "surface", "INK_PRIMARY": "ink", "INK_SECONDARY": "ink_soft",
-               "INK_MUTED": "ink_muted", "GRID": "grid", "BASELINE": "baseline",
-               "SERIES": "series", "ORDINAL_BLUE": "ordinal"}
-    if name in mapping:
-        return palette()[mapping[name]]
-    raise AttributeError(name)
 
 
 def ordinal_colors(count: int) -> list[str]:

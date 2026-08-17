@@ -88,9 +88,6 @@ def _tag_rows(facts: dict, tag: str, unit: str) -> pd.DataFrame:
     return frame
 
 
-def has_tag(facts: dict, tag: str, unit: str = "USD") -> bool:
-    return not _tag_rows(facts, tag, unit).empty
-
 
 def instant_series(facts: dict, tag: str, unit: str = "USD") -> pd.DataFrame:
     """재무상태표 항목(특정 시점의 잔액) 시계열. 컬럼: end, val, form, filed."""
@@ -167,20 +164,6 @@ def latest_instant(facts: dict, tag: str, unit: str = "USD"):
     row = series.iloc[-1]
     return row["end"], float(row["val"])
 
-
-def latest_period(facts: dict, tag: str, unit: str = "USD", max_days: int = 100):
-    """가장 최근의 '분기 길이' 구간을 돌려준다. 반기/연 구간만 있으면 None.
-
-    max_days 기본값 100일은 분기(약 90일)는 통과시키고 반기(약 180일)는 걸러내는 선이다.
-    """
-    series = periodic_series(facts, tag, unit)
-    if series.empty:
-        return None
-    series = series[series["days"] <= max_days]
-    if series.empty:
-        return None
-    row = series.iloc[-1]
-    return row["end"], float(row["val"]), int(row["days"])
 
 
 def quarter_label(timestamp) -> str:
