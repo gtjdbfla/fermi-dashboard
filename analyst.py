@@ -563,7 +563,14 @@ def payload(data: dict, action_frame: pd.DataFrame) -> str:
 def fingerprint(data: dict, action_frame: pd.DataFrame) -> str:
     import hashlib
     view = str(data.get("overview") or "")
-    titles = sorted(action_frame["제목"]) if action_frame is not None and not action_frame.empty else []
+    # combined()에는 제목 열이 없다. 어떤 표가 와도 도는 키를 만든다.
+    titles = []
+    if action_frame is not None and not action_frame.empty:
+        column = "제목" if "제목" in action_frame.columns else None
+        if column:
+            titles = sorted(action_frame[column].astype(str))
+        else:
+            titles = sorted(action_frame.astype(str).agg("|".join, axis=1))
     return hashlib.sha256((view + "".join(titles)).encode("utf-8")).hexdigest()[:16]
 
 
