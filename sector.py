@@ -287,6 +287,13 @@ def coverage_benchmark() -> dict:
     return out
 
 
+def _maturity_card() -> dict:
+    """판정 ②는 계산해서 채운다. 예전에는 "리스 15년 vs 사채 2031년"이 문자열로 박혀 있어,
+    새 사채가 발행되거나 리스 조건이 바뀌어도 화면이 그대로였다."""
+    import maturity as mt
+    return mt.verdict({})
+
+
 def fermi_position(m: dict) -> list[dict]:
     """검증에서 살아남은 세 지표에 페르미를 놓는다."""
     contracted = m.get("mw_contracted") or 0
@@ -303,10 +310,7 @@ def fermi_position(m: dict) -> list[dict]:
         "verdict": "미달 — 투입과 계약의 순서가 반대다",
     }, {
         "label": "② 계약 기간이 부채 만기를 덮는가",
-        "status": "good",
-        "value": "리스 15년 vs 사채 2031년(5년)",
-        "detail": "계약이 부채보다 길다. New Fortress를 무너뜨린 불일치는 지금 구조에 없다.",
-        "verdict": "충족",
+        **{k: v for k, v in _maturity_card().items() if k != "gap_years"},
     }]
 
     # 전환까지 걸린 연수는 표본에서 직접 뽑는다. 숫자를 문장에 박아두면 표본을 갱신했을 때

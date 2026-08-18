@@ -20,6 +20,7 @@ import filing_review as fr
 import freshness as fresh
 import fundamentals as fd
 import market
+import maturity as mt
 import market_flow as mflow
 import news as nw
 import roadmap as rm
@@ -231,8 +232,10 @@ for column, item in zip(st.columns(3), sc.fermi_position(m)):
             with st.popover("근거", icon=":material/help:"):
                 st.markdown(item["detail"])
 
-tabs = st.tabs(["① 계약 커버리지", "② 현금흐름 전환", "③ 로드맵", "④ 섹터 검증", "⑤ 시장·수급",
-                "⑥ 뉴스·소문", "⑦ 애널리스트", "참고 지표", "원본 데이터"])
+# 원문자는 핵심 판정 ①②③과 **같은 뜻으로만** 쓴다. 예전에는 탭 ②가 현금흐름(판정 ③)이라
+# 같은 기호가 두 곳에서 다른 걸 가리켰고, 판정 ②는 볼 화면이 아예 없었다.
+tabs = st.tabs(["① 계약 커버리지", "② 만기 정합", "③ 현금흐름 전환", "로드맵", "섹터 검증",
+                "시장·수급", "뉴스·소문", "애널리스트", "참고 지표", "원본 데이터"])
 
 # ── ① 계약 커버리지 ───────────────────────────────────────────────────────────
 with tabs[0]:
@@ -294,8 +297,58 @@ with tabs[0]:
     table(stages.rename(columns={"order": "순서", "stage": "단계", "mw": "MW", "certainty": "확정도",
                                  "as_of": "기준일", "source": "출처", "note": "비고"}))
 
-# ── ② 현금흐름 전환 ───────────────────────────────────────────────────────────
+# ── ② 만기 정합 ───────────────────────────────────────────────────────────────
 with tabs[1]:
+    heading("계약 기간이 부채 만기를 덮는가", size="####", help_text=(
+        "**계약이 있어도 무너질 수 있다.** New Fortress가 그랬다 — 계약 자체는 있었는데 "
+        "계약에서 현금이 들어오기 전에 부채 만기가 먼저 와서 재융자에 실패했고, 영업현금흐름이 "
+        "+$602M에서 -$583M으로 뒤집혔다. 붕괴 4곳 중 **계약을 갖고도** 무너진 유일한 사례다.\n\n"
+        "그래서 두 시점의 순서만 본다 — 리스에서 돈이 들어오는 때와, 갚아야 하는 때.\n\n"
+        "값은 `data/contracts.csv`(리스 기간)와 `data/capital_events.csv`(차입 만기)에서 "
+        "계산한다. 문장에 박아두면 새 사채가 발행돼도 화면이 그대로다."))
+    st.caption(fresh.tab_line("maturity", m, price_frame))
+
+    mv = mt.verdict(m)
+    schedule = mt.schedule()
+    leases = schedule[schedule["구분"] == "리스 유입"].dropna(subset=["종료"])
+    debts = schedule[schedule["구분"] == "부채 만기"]
+    known = debts.dropna(subset=["종료"])
+    metric_row([
+        ("판정", f"{th.STATUS_ICON[mv['status']]} {mv['verdict'].split(' — ')[0]}",
+         mv["verdict"]),
+        ("리스 종료", str(leases["종료"].max().year) + "년" if not leases.empty else "–",
+         "구속력 있는 계약의 마지막 해"),
+        ("가장 이른 부채 만기", str(known["종료"].min().year) + "년" if not known.empty else "–",
+         "이 시점이 관문이다"),
+        ("여유", f"{mv['gap_years']:+.0f}년" if mv.get("gap_years") is not None else "–",
+         "리스 종료 − 최초 만기"),
+    ])
+
+    if not schedule.empty:
+        # 유입과 상환을 같은 시간축에 놓아야 순서가 눈에 들어온다.
+        palette = th.palette()
+        figure = go.Figure()
+        for index, row in enumerate(schedule.dropna(subset=["시작"]).to_dict("records")):
+            end = row["종료"] if pd.notna(row["종료"]) else row["시작"] + pd.DateOffset(months=6)
+            inflow = row["구분"] == "리스 유입"
+            figure.add_scatter(
+                x=[row["시작"], end], y=[index, index], mode="lines+markers",
+                line=dict(color=palette["series"][0] if inflow else palette["series"][1],
+                          width=10 if inflow else 6,
+                          dash="solid" if pd.notna(row["종료"]) else "dot"),
+                marker=dict(size=8), name=row["항목"], showlegend=False,
+                hovertemplate=f"{row['항목']}<br>%{{x|%Y-%m}}<extra></extra>")
+        th.style(figure, height=260)
+        figure.update_yaxes(showticklabels=False)
+        st.plotly_chart(figure, use_container_width=True)
+        st.caption("굵은 선이 리스 유입, 가는 선이 차입. **점선은 만기를 확인하지 못한 것**이다.")
+
+    table(mt.view(schedule))
+
+    note(mv["detail"], label="이 판정의 근거")
+
+# ── ② 현금흐름 전환 ───────────────────────────────────────────────────────────
+with tabs[2]:
     heading("가동 후 현금이 실제로 들어오기 시작하는가", size="####", help_text=(
         "유지 그룹 6곳은 전부 영업현금흐름 흑자에 도달했고, 붕괴 4곳은 도달하지 못했거나"
         "(Plug Power·FuelCell) 도달한 뒤 되돌아갔다(New Fortress).\n\n"
@@ -336,7 +389,7 @@ with tabs[1]:
                                          "status": "상태", "source": "출처"}))
 
 # ── ③ 로드맵 ──────────────────────────────────────────────────────────────────
-with tabs[2]:
+with tabs[3]:
     steps = rm.evaluate(m)
     state = rm.progress(steps)
     heading("유지 기업들의 길을 가려면", size="####", help_text=(
@@ -384,7 +437,7 @@ with tabs[2]:
                     st.markdown(f"{row.peer_reference}\n\n{row.note}")
 
 # ── ④ 섹터 검증 ───────────────────────────────────────────────────────────────
-with tabs[3]:
+with tabs[4]:
     heading("이 항목들이 실제로 결과를 갈랐는가", size="####", help_text=(
         "매출보다 먼저 대규모 인프라를 지은 상장사 13곳. 결과는 주가가 아니라 **객관적 재무 사건**으로 "
         "나눴다(주가로 나누면 순환논증이 된다). 그런 다음 항목별 값을 두 그룹에 대조했다.\n\n"
@@ -502,7 +555,7 @@ with tabs[3]:
                                         "자기자본", "장기차입", "주식수(백만)"]])
 
 # ── ⑤ 시장·수급 ───────────────────────────────────────────────────────────────
-with tabs[4]:
+with tabs[5]:
     heading("주가가 왜 움직였는가", size="####", help_text=(
         "**이 탭은 펀더멘탈이 아니다.** 회사의 건강이 아니라 주가 움직임을 설명하는 층이다.\n\n"
         "상장 후 219거래일 실측: AI 인프라 동종주 상관 0.39~0.45, 광의 시장 0.28~0.33, "
@@ -593,7 +646,7 @@ with tabs[4]:
         table(insiders)
 
 # ── ⑥ 뉴스·소문 ───────────────────────────────────────────────────────────────
-with tabs[5]:
+with tabs[6]:
     heading("계약 숫자를 바꿀 소식이 떴는가", size="####", help_text=(
         "**뉴스는 펀더멘탈이 아니다.** 목적은 하나 — 핵심 판정 ①(계약 커버리지 "
         f"{fd.pct(m.get('contracted_vs_landed'))})을 바꿀 소식을 먼저 알아채는 것.\n\n"
@@ -681,7 +734,7 @@ with tabs[5]:
               height=320)
 
 # ── ⑦ 애널리스트 ──────────────────────────────────────────────────────────────
-with tabs[6]:
+with tabs[7]:
     heading("애널리스트는 이 회사를 무엇으로 보고 있는가", size="####", help_text=(
         "**증권사 리포트 원문은 유료다.** 공개된 세 갈래로 같은 내용을 재구성한다 — Nasdaq "
         "컨센서스 API(목표주가·의견 분포), Nasdaq 실적 추정 API(EPS 컨센서스), 그리고 뉴스 "
@@ -787,7 +840,7 @@ with tabs[6]:
 
 
 # ── 참고 지표 ─────────────────────────────────────────────────────────────────
-with tabs[7]:
+with tabs[8]:
     heading("판정에서 내린 항목들", size="####", help_text=(
         "섹터 검증에서 생존과 붕괴를 가르지 못한 항목이다. 지우면 맥락을 잃으므로 참고로만 남긴다. "
         "각 항목을 펼치면 왜 내렸는지가 먼저 나온다."))
@@ -870,7 +923,7 @@ with tabs[7]:
                                          height=300), use_container_width=True)
 
 # ── 원본 데이터 ───────────────────────────────────────────────────────────────
-with tabs[8]:
+with tabs[9]:
     heading("데이터 출처", size="####", help_text=(
         "EDGAR는 현금흐름 항목을 회계연도 기초부터 누적해서 담는다. 그대로 쓰면 4분기 막대가 연간값이 "
         "되므로 `sec_edgar.periodic_series()`가 누적을 분기 구간으로 되돌린 뒤 화면에 올린다."))
