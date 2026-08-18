@@ -735,19 +735,34 @@ with tabs[6]:
                                    "consensus": "컨센서스"})
               [["시점", "목표주가", "매수", "보유", "매도", "컨센서스"]], height=260)
 
-    actions = an.actions(an.headlines())
+    actions = an.merged_actions(nw.cached_articles())
     heading("개별 증권사 액션", help_text=(
         "**리포트 원문이 아니라 기사 제목에서 뽑은 것이다.** 증권사 이름이 제목에 없으면 버린다 — "
         "\"FRMI Stock Price Prediction 2026\" 같은 글이 애널리스트 액션으로 섞이는 걸 막는 "
         "가장 확실한 기준이다.\n\n"
-        "`언급된 이유`는 제목의 \"on ~\"·\"following ~\" 뒤를 그대로 옮긴 것이다. 제목에 사유가 "
-        "없으면 –로 둔다. 같은 액션을 여러 매체가 쓰면 목표가·사유가 실린 제목만 남긴다."))
+        "`언급된 이유`는 제목의 \"on ~\"·\"following ~\" 뒤를 그대로 옮긴 것이다. 같은 증권사가 "
+        "같은 날 낸 것은 한 리포트로 보고 합친다 — 매체마다 목표가만 쓰거나 사유만 쓰기 때문이다.\n\n"
+        "구글 뉴스는 같은 질의라도 호출마다 다른 묶음을 준다. 그래서 결과를 덮지 않고 **누적**한다."))
     if actions.empty:
         st.caption("최근 애널리스트 액션을 찾지 못했다.")
     else:
+        window = actions[pd.to_datetime(actions["시점"], errors="coerce")
+                         >= pd.Timestamp.today() - pd.Timedelta(days=90)]
+        cuts = int(window["행동"].isin(["목표가 인하", "하향"]).sum())
+        ups = int(window["행동"].isin(["목표가 상향", "상향"]).sum())
+        reasons = [r for r in window["언급된 이유"] if r != "–"]
+        metric_row([
+            ("최근 90일 액션", f"{len(window)}건", "그 기간 잡힌 개별 리포트"),
+            ("인하·하향", f"{cuts}건", "목표가 인하 + 투자의견 하향"),
+            ("상향", f"{ups}건", "목표가 상향 + 투자의견 상향"),
+            ("최신", str(actions.iloc[0]["시점"]) if len(actions) else "–",
+             f"{actions.iloc[0]['증권사']} {actions.iloc[0]['행동']}" if len(actions) else ""),
+        ])
+        if reasons:
+            st.caption("최근 언급된 사유 — " + " · ".join(dict.fromkeys(reasons)))
         table(actions.drop(columns=["제목"]), column_config={
             "링크": st.column_config.LinkColumn("링크", display_text="열기"),
-            "": st.column_config.TextColumn("", width="small")}, height=320)
+            "": st.column_config.TextColumn("", width="small")}, height=380)
 
     eps = consensus.get("eps") or []
     if eps:

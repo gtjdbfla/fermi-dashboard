@@ -52,16 +52,27 @@ BROKERS = [
 ]
 # 행동 → (표시명, 방향). 방향은 화면 색과 정렬에만 쓴다.
 ACTIONS = [
-    (r"initiat(e|es|ed)\s+(coverage|with)|begins?\s+coverage|starts?\s+coverage|coverage\s+initiated",
+    (r"initiat(e|es|ed)\s+(coverage|with)|begins?\s+coverage|starts?\s+coverage|"
+     r"coverage\s+initiated|assumes?\s+coverage|resumes?\s+coverage",
      "신규 커버리지", "new"),
     (r"\bupgrade[sd]?\b", "상향", "up"),
     (r"\bdowngrade[sd]?\b", "하향", "down"),
-    (r"(rais|lift|hik|boost|increas)(e|es|ed)\s+(the\s+)?(stock\s+)?price\s+target|"
-     r"price\s+target\s+(rais|lift|increas)ed|new\s+.{0,12}price\s+target", "목표가 상향", "up"),
-    (r"(cut|cuts|lower|lowers|lowered|reduc|slash)\w*\s+(the\s+)?(stock\s+)?price\s+target|"
-     r"price\s+target\s+(cut|lowered|reduced)", "목표가 인하", "down"),
+    (r"(rais|lift|hik|boost|increas)\w*\s+(?:\w+\s+){0,3}price\s+target|"
+     r"price\s+target\s+(rais|lift|increas)ed", "목표가 상향", "up"),
+    (r"(cut|cuts|lower|lowers|lowered|reduc|slash|trim)\w*\s+(?:\w+\s+){0,3}price\s+target|"
+     r"price\s+target\s+(cut|lowered|reduced|trimmed)", "목표가 인하", "down"),
+    # "Adjusts Price Target to $15 From $18"은 방향이 단어가 아니라 두 숫자에 들어 있다.
+    # 여기서는 조정으로만 잡고, actions()가 to/from을 비교해 상향·인하로 확정한다.
+    # "Given New $11.00 Price Target"은 새 목표가만 말할 뿐 올렸는지 내렸는지가 없다.
+    (r"(given|sets?)\s+new\s+.{0,14}price\s+target", "목표가 제시", "flat"),
+    (r"adjusts?\s+.{0,24}price\s+target|price\s+target\s+adjust", "목표가 조정", "flat"),
     (r"\b(maintain|reiterat|reaffirm|keeps?)\w*\b", "유지", "flat"),
 ]
+# "to $15 from $18" — 앞이 새 목표가, 뒤가 이전 목표가다.
+_TO_FROM = re.compile(r"to\s+\$(\d[\d,]*\.?\d*)\s+from\s+\$(\d[\d,]*\.?\d*)", re.I)
+# 같은 리포트가 여러 각도로 보도될 때 어느 표현을 대표로 삼을지. 방향이 분명한 쪽이 앞이다.
+ACTION_RANK = {"신규 커버리지": 0, "하향": 1, "상향": 1, "목표가 인하": 2, "목표가 상향": 2,
+               "목표가 조정": 3, "목표가 제시": 4, "유지": 5}
 DIRECTION_ICON = {"up": "🟢", "down": "🔴", "new": "🔵", "flat": "⚪"}
 
 
@@ -125,24 +136,25 @@ def history_frame(data: dict) -> pd.DataFrame:
 
 
 # ── 개별 리포트 액션 (뉴스 헤드라인) ──────────────────────────────────────────
-QUERY = ('"Fermi" FRMI (analyst OR "price target" OR upgrade OR downgrade OR '
-         'initiated OR coverage OR rating)')
+# **쿼리 하나로는 놓친다.** 구글 뉴스 RSS는 질의마다 다른 관련도 순위를 돌려줘서, 같은 사건이
+# 어떤 질의에는 있고 어떤 질의에는 없다. 실측으로 8/14 Macquarie 목표가 조정과 6/23 Stifel 인하가
+# 서로 다른 질의에서만 잡혔다. 표현을 달리한 넷을 합쳐야 빠짐이 줄어든다.
+QUERIES = [
+    '"Fermi" FRMI (analyst OR "price target" OR upgrade OR downgrade OR initiated OR coverage)',
+    'Fermi FRMI "price target"',
+    'Fermi FRMI analyst rating',
+    'Fermi Inc FRMI (Mizuho OR Stifel OR UBS OR Evercore OR Macquarie OR Citizens OR Cantor)',
+]
 
 
-@st.cache_data(ttl=900, show_spinner=False)
-def headlines(force: bool = False) -> pd.DataFrame:
-    """애널리스트 액션이 담긴 기사 제목. 원문 리포트가 유료라 제목으로 대신한다."""
-    if not force:
-        cached = dc.load_frame(HEADLINE_CACHE, HEADLINE_MAX_AGE)
-        if cached is not None:
-            return cached
-    records = []
+def _rss(query: str) -> list[dict]:
     try:
         response = requests.get("https://news.google.com/rss/search", headers=UA, timeout=TIMEOUT,
-                                params={"q": QUERY, "hl": "en-US", "gl": "US", "ceid": "US:en"})
+                                params={"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"})
         root = ElementTree.fromstring(response.content)
     except Exception:
-        return dc.load_frame(HEADLINE_CACHE, 86400 * 30) or pd.DataFrame()
+        return []
+    records = []
     for item in root.findall(".//item"):
         title = html.unescape(item.findtext("title") or "")
         source = item.findtext("{http://search.yahoo.com/mrss/}source") or ""
@@ -153,14 +165,59 @@ def headlines(force: bool = False) -> pd.DataFrame:
             "title": title.strip(), "source": source.strip() or "Google News",
             "url": item.findtext("link") or "",
         })
-    frame = pd.DataFrame(records)
-    if not frame.empty:
-        dc.save_frame(HEADLINE_CACHE, frame)
+    return records
+
+
+KEEP_HEADLINES = 600           # 누적본 상한. 오래된 것부터 버린다.
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def headlines(force: bool = False) -> pd.DataFrame:
+    """애널리스트 액션이 담긴 기사 제목. 원문 리포트가 유료라 제목으로 대신한다.
+
+    **받아온 결과로 덮지 않고 누적한다.** 구글 뉴스 RSS는 같은 질의라도 호출마다 다른
+    묶음을 돌려준다 — 실측에서 7/28 Mizuho 인하 기사가 한 번은 오고 다음엔 빠졌다.
+    덮어쓰면 화면의 액션이 새로고침마다 나타났다 사라진다. 합집합으로 쌓으면 커버리지가
+    시간이 갈수록 좋아지기만 한다.
+    """
+    previous = dc.load_frame(HEADLINE_CACHE, 86400 * 365)
+    if not force:
+        fresh_enough = dc.load_frame(HEADLINE_CACHE, HEADLINE_MAX_AGE)
+        if fresh_enough is not None:
+            return fresh_enough
+
+    with ThreadPoolExecutor(max_workers=len(QUERIES)) as pool:
+        parts = [row for chunk in pool.map(_rss, QUERIES) for row in chunk]
+    if not parts:
+        # 받지 못했으면 낡은 캐시라도 쓴다. 빈 표로 덮으면 이력이 통째로 사라진다.
+        return previous if previous is not None else pd.DataFrame()
+
+    frame = pd.DataFrame(parts)
+    if previous is not None and not previous.empty:
+        frame = pd.concat([previous, frame], ignore_index=True)
+    frame = frame[frame["title"].astype(str).str.strip() != ""]
+    frame["published"] = pd.to_datetime(frame["published"], errors="coerce", utc=True)
+    frame["_key"] = frame["title"].str.lower().str.replace(r"[^a-z0-9]", "", regex=True).str[:70]
+    frame = (frame.drop_duplicates("_key").drop(columns="_key")
+                  .sort_values("published", ascending=False, na_position="last")
+                  .head(KEEP_HEADLINES).reset_index(drop=True))
+    dc.save_frame(HEADLINE_CACHE, frame)
     return frame
 
 
 def _price_targets(text: str) -> list[float]:
-    return [float(value.replace(",", "")) for value in re.findall(r"\$(\d[\d,]*\.?\d*)", text)]
+    """제목의 $금액 중 **목표주가로 볼 수 있는 것만**.
+
+    "$6.5B data center lease"의 6.5는 계약 규모지 목표주가가 아니다. 실제로 8/11 Mizuho
+    기사에서 이걸 목표가 $6.50으로 잘못 읽었다. 뒤에 B·M·billion 같은 단위가 붙으면 뺀다.
+    """
+    values = []
+    for match in re.finditer(r"\$(\d[\d,]*\.?\d*)\s*([A-Za-z]*)", text):
+        amount, suffix = match.group(1), (match.group(2) or "").lower()
+        if suffix[:1] in ("b", "m", "k") or suffix.startswith(("bn", "billion", "million")):
+            continue
+        values.append(float(amount.replace(",", "")))
+    return values
 
 
 # 인하·상향 사유는 "on ~", "following ~", "amid ~" 뒤에 붙는다.
@@ -196,6 +253,10 @@ def actions(frame: pd.DataFrame) -> pd.DataFrame:
 
     증권사 이름이 없으면 버린다. "FRMI Stock Price Prediction 2026" 같은 콘텐츠 농장 글이
     애널리스트 액션으로 섞여 들어오는 걸 막는 가장 확실한 기준이다.
+
+    **중복은 사건 단위가 아니라 기사 단위로 뺀다.** 예전에는 (증권사, 행동)으로 묶었는데,
+    그러면 같은 증권사가 몇 달 간격으로 두 번 목표가를 내려도 한 건만 남아 최신 리포트가
+    사라졌다. 실제로 8월 Macquarie·Mizuho 액션이 그렇게 지워졌다.
     """
     if frame is None or frame.empty:
         return pd.DataFrame()
@@ -210,27 +271,101 @@ def actions(frame: pd.DataFrame) -> pd.DataFrame:
                                   if re.search(pattern, lowered)), (None, None))
         if not action:
             continue
-        targets = _price_targets(title)
+
+        # "to $15 from $18"이면 두 숫자를 비교해 방향까지 확정한다.
+        pair = _TO_FROM.search(title)
+        previous = ""
+        if pair:
+            new_target, old_target = (float(v.replace(",", "")) for v in pair.groups())
+            previous = f"${old_target:,.2f}"
+            targets = [new_target]
+            if action in ("목표가 조정", "유지"):
+                action = "목표가 인하" if new_target < old_target else "목표가 상향"
+                direction = "down" if new_target < old_target else "up"
+        else:
+            targets = _price_targets(title)
+
+        when = pd.Timestamp(row.published).date() if pd.notna(row.published) else None
         rows.append({
             "": DIRECTION_ICON.get(direction, "·"),
-            "시점": pd.Timestamp(row.published).date() if pd.notna(row.published) else None,
+            "시점": when,
             "증권사": broker,
             "행동": action,
             "목표가": f"${targets[0]:,.2f}" if targets else "–",
+            "이전": previous or "–",
             "언급된 이유": _reason(title),
             "제목": title,
             "링크": getattr(row, "url", ""),
-            "_유용": (targets != []) + (_reason(title) != "–"),  # 정보가 많은 쪽을 남긴다
+            # 같은 사건을 여러 매체가 쓴다. 증권사·행동·날짜가 같으면 한 사건으로 본다.
+            "_사건": f"{broker}|{action}|{when}",
+            "_유용": (targets != []) + (_reason(title) != "–") + bool(previous),
         })
     out = pd.DataFrame(rows)
     if out.empty:
         return out
-    # 같은 액션을 여러 매체가 쓴다. 목표가·이유가 실린 제목을 남기고 나머지를 버린다.
-    out = (out.sort_values(["_유용", "시점"], ascending=[False, False], na_position="last")
-              .drop_duplicates(subset=["증권사", "행동"], keep="first"))
-    return (out.drop(columns="_유용")
+    # 같은 증권사가 같은 날 낸 것은 한 리포트다. 매체마다 다른 각도로 써서 여러 행으로
+    # 잡히는데(7/28 Mizuho가 "새 목표가 $11" 기사와 "테넌트 지연으로 인하" 기사로 갈렸다),
+    # 방향이 분명한 행동을 남기고 나머지 행의 목표가·이유를 끌어와 채운다.
+    out["_순위"] = out["행동"].map(lambda a: ACTION_RANK.get(a, 99))
+    merged = []
+    for _, group in out.groupby(["증권사", "시점"], dropna=False):
+        group = group.sort_values(["_순위", "_유용"], ascending=[True, False])
+        best = group.iloc[0].to_dict()
+        for column in ("목표가", "이전", "언급된 이유"):
+            if best[column] == "–":
+                other = group[group[column] != "–"]
+                if not other.empty:
+                    best[column] = other.iloc[0][column]
+        merged.append(best)
+    out = pd.DataFrame(merged)
+    return (out.drop(columns=["_사건", "_유용", "_순위"])
                .sort_values("시점", ascending=False, na_position="last")
                .reset_index(drop=True))
+
+
+def absorb(extra: pd.DataFrame | None) -> int:
+    """일반 뉴스 풀에서 애널리스트 관련 제목만 골라 누적 캐시에 합친다.
+
+    일반 뉴스 캐시는 30분마다 통째로 덮인다. 거기에만 있던 액션(8/14 Macquarie, 8/11
+    Mizuho가 그랬다)은 다음 수집에서 사라진다. 여기로 옮겨 두면 남는다.
+    """
+    if extra is None or extra.empty:
+        return 0
+    keep = extra[extra["title"].astype(str).str.contains(
+        r"price\s+target|analyst|upgrad|downgrad|initiat|coverage|rating|outperform",
+        case=False, na=False)]
+    if keep.empty:
+        return 0
+    previous = dc.load_frame(HEADLINE_CACHE, 86400 * 365)
+    columns = ["published", "title", "source", "url"]
+    frame = keep[columns].copy()
+    if previous is not None and not previous.empty:
+        before = len(previous)
+        frame = pd.concat([previous[columns], frame], ignore_index=True)
+    else:
+        before = 0
+    frame["published"] = pd.to_datetime(frame["published"], errors="coerce", utc=True)
+    frame["_key"] = frame["title"].str.lower().str.replace(r"[^a-z0-9]", "", regex=True).str[:70]
+    frame = (frame.drop_duplicates("_key").drop(columns="_key")
+                  .sort_values("published", ascending=False, na_position="last")
+                  .head(KEEP_HEADLINES).reset_index(drop=True))
+    dc.save_frame(HEADLINE_CACHE, frame)
+    return len(frame) - before
+
+
+def merged_actions(extra: pd.DataFrame | None = None) -> pd.DataFrame:
+    """누적 캐시에 일반 뉴스 풀을 얹어서 뽑는다.
+
+    일반 뉴스는 이미 30분마다 받아 두므로 추가 비용이 없는데, 전용 질의가 놓친 최신 액션이
+    거기 들어 있다(8/14 Macquarie, 8/11 Mizuho가 그랬다). 둘을 합쳐야 빠짐이 줄어든다.
+    """
+    parts = [headlines()]
+    if extra is not None and not extra.empty:
+        parts.append(extra[["published", "title", "source", "url"]])
+    usable = [p for p in parts if p is not None and not p.empty]
+    if not usable:
+        return pd.DataFrame()
+    return actions(pd.concat(usable, ignore_index=True))
 
 
 # ── AI 분석 ───────────────────────────────────────────────────────────────────
@@ -284,9 +419,15 @@ def payload(data: dict, action_frame: pd.DataFrame) -> str:
     for row in data.get("eps") or []:
         parts.append(f"<EPS 추정>{row}</EPS 추정>")
     if action_frame is not None and not action_frame.empty:
-        for row in action_frame.head(20).itertuples():
-            parts.append(f"<리포트 {row.시점}>{row.증권사} · {row.행동} · 목표 {row.목표가} · "
-                         f"제목: {row.제목}</리포트>")
+        parts.append("<개별 리포트 — 최신순>")
+        for row in action_frame.head(24).itertuples():
+            bits = [f"{row.시점}", row.증권사, row.행동]
+            if row.목표가 != "–":
+                bits.append(f"목표 {row.목표가}" + (f" (이전 {row.이전})" if row.이전 != "–" else ""))
+            if getattr(row, "언급된_이유", "–") != "–":
+                bits.append(f"사유: {row.언급된_이유}")
+            parts.append("  · " + " · ".join(bits))
+        parts.append("</개별 리포트>")
     return "\n".join(parts)
 
 

@@ -119,12 +119,14 @@ def warm_analyst(m) -> None:
     try:
         import analyst as an
         heads = raw(an.headlines)(force=True)
-        actions = an.actions(heads)
+        pool = raw(news.cached_articles)()
+        gained = an.absorb(pool)
+        actions = an.merged_actions(pool)
         data = raw(an.consensus)()
         key = an.fingerprint(data, actions)
         text, error = an.review(key, an.payload(data, actions), an.facts_from(m))
         if text and not error:
-            print(f"[ok] 애널리스트 액션 {len(actions)}건 · AI 정리 준비됨")
+            print(f"[ok] 애널리스트 액션 {len(actions)}건(신규 제목 +{gained}) · AI 정리 준비됨")
         elif error and "간격 제한" in error:
             print(f"[skip] 애널리스트 AI 정리 — {error}")
         elif error:
