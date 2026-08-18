@@ -139,6 +139,18 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
     add("사람 확정", "계약·용량 수치",
         str(pd.Timestamp(m["staleness_asof"]).date()) if m.get("staleness_asof") is not None else None,
         None, "새 8-K 감지는 자동 · 반영은 커밋")
+    # AI 호출량 — 무료 한도는 모델별로 잡히고, stock_dashboard와 키를 공유하면 같이 깎인다.
+    # 얼마나 쓰고 있는지 보이지 않으면 429가 날 때까지 모른다.
+    import ai_review
+    used = ai_review.usage()
+    if used:
+        records.append({
+            "구분": "참고", "데이터": "AI 호출(오늘)",
+            "최신 시점": " · ".join(f"{k.split('/')[-1]} {v}회" for k, v in used.items()),
+            "경과": "–", "갱신 주기": f"주 {ai_review.MODEL} / 보조 {ai_review.FALLBACK_MODEL}",
+            "상태": "✅",
+        })
+
     return pd.DataFrame(records)
 
 

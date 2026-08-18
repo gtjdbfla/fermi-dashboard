@@ -420,12 +420,15 @@ def payload(data: dict, action_frame: pd.DataFrame) -> str:
         parts.append(f"<EPS 추정>{row}</EPS 추정>")
     if action_frame is not None and not action_frame.empty:
         parts.append("<개별 리포트 — 최신순>")
-        for row in action_frame.head(24).itertuples():
-            bits = [f"{row.시점}", row.증권사, row.행동]
-            if row.목표가 != "–":
-                bits.append(f"목표 {row.목표가}" + (f" (이전 {row.이전})" if row.이전 != "–" else ""))
-            if getattr(row, "언급된_이유", "–") != "–":
-                bits.append(f"사유: {row.언급된_이유}")
+        # itertuples는 공백이 든 컬럼명을 _7 같은 위치 이름으로 바꾼다. 그걸 모르고
+        # row.언급된_이유로 읽다가 사유가 통째로 빠졌다(getattr 기본값이 이를 가렸다).
+        for row in action_frame.head(24).to_dict("records"):
+            bits = [str(row["시점"]), row["증권사"], row["행동"]]
+            if row["목표가"] != "–":
+                bits.append(f"목표 {row['목표가']}"
+                            + (f" (이전 {row['이전']})" if row["이전"] != "–" else ""))
+            if row["언급된 이유"] != "–":
+                bits.append(f"사유: {row['언급된 이유']}")
             parts.append("  · " + " · ".join(bits))
         parts.append("</개별 리포트>")
     return "\n".join(parts)
@@ -452,15 +455,9 @@ def review(key: str, text_payload: str, facts: dict, force: bool = False) -> tup
     if wait:
         return cached.get("text", ""), f"호출 간격 제한 — {wait/60:.0f}분 뒤 재시도"
     ai_review._mark(RATE_CACHE)
-    try:
-        from google import genai
-        client = genai.Client()
-        interaction = client.interactions.create(
-            model=os.environ.get("GEMINI_MODEL", "gemini-flash-latest"),
-            input=_prompt(text_payload, facts))
-        text = (interaction.output_text or "").strip()
-    except Exception as error:
-        return cached.get("text", ""), f"{type(error).__name__}: {error}"
+    text, error = ai_review.generate(_prompt(text_payload, facts))
+    if error:
+        return cached.get("text", ""), error
     if text:
         dc.save_json(REVIEW_CACHE, {"fingerprint": key, "text": text,
                                     "generated_at": pd.Timestamp.now(tz="UTC").isoformat()})

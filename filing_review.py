@@ -127,16 +127,10 @@ def run(m: dict, reviewed_through, force: bool = False) -> dict:
         "target": m.get("mw_target") or 0, "operating": m.get("mw_operating") or 0,
         "debt": f"${(m.get('debt_proforma') or 0)/1e6:,.0f}M",
     }
-    try:
-        from google import genai
-        client = genai.Client()
-        interaction = client.interactions.create(
-            model=os.environ.get("GEMINI_MODEL", "gemini-flash-latest"),
-            input=_prompt("\n\n".join(payload), facts))
-        text = (interaction.output_text or "").strip()
-    except Exception as error:
-        return {"count": len(frame), "fingerprint": key, "text": "",
-                "error": f"{type(error).__name__}: {error}"}
+    import ai_review
+    text, error = ai_review.generate(_prompt("\n\n".join(payload), facts))
+    if error:
+        return {"count": len(frame), "fingerprint": key, "text": "", "error": error}
 
     result = {
         "count": int(len(frame)), "fingerprint": key, "text": text, "error": "",

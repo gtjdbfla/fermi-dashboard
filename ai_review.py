@@ -138,6 +138,45 @@ def _prompt(payload: str, facts: dict) -> str:
 - **투자 판단·매수매도 권유·목표주가를 쓰지 마라.**"""
 
 
+# 무료 한도는 **키가 아니라 모델별로** 잡힌다(2026-08-18 실측: 같은 키에서 flash는 429인데
+# flash-lite는 정상). 그래서 주 모델이 막히면 보조 모델로 한 번 더 시도한다.
+FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-flash-lite-latest")
+USAGE_CACHE = "ai_usage"
+
+
+def _count(model: str) -> None:
+    """오늘 몇 번 불렀는지 모델별로 센다. 한도에 얼마나 가까운지 화면에서 보여주려는 것."""
+    today = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
+    stored = dc.load_json(USAGE_CACHE, 86400 * 7) or {}
+    if stored.get("date") != today:
+        stored = {"date": today, "models": {}}
+    stored["models"][model] = stored["models"].get(model, 0) + 1
+    dc.save_json(USAGE_CACHE, stored)
+
+
+def usage() -> dict:
+    today = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
+    stored = dc.load_json(USAGE_CACHE, 86400 * 7) or {}
+    return stored.get("models", {}) if stored.get("date") == today else {}
+
+
+def generate(prompt: str) -> tuple[str, str]:
+    """(본문, 오류). 주 모델이 한도를 넘기면 보조 모델로 자동 전환한다."""
+    from google import genai
+    client = genai.Client()
+    last_error = ""
+    for model in [MODEL] + ([FALLBACK_MODEL] if FALLBACK_MODEL != MODEL else []):
+        try:
+            interaction = client.interactions.create(model=model, input=prompt)
+            _count(model)
+            return (interaction.output_text or "").strip(), ""
+        except Exception as error:
+            last_error = f"{type(error).__name__}: {error}"
+            if "429" not in str(error):
+                break          # 한도 문제가 아니면 모델을 바꿔도 마찬가지다
+    return "", last_error
+
+
 def _too_soon(cache: str = RATE_CACHE) -> float:
     """마지막 호출 이후 남은 대기 시간(초). 0이면 불러도 된다.
 
@@ -169,13 +208,9 @@ def analyze(fingerprint_key: str, payload: str, facts: dict) -> tuple[str, str]:
     if wait:
         return "", f"호출 간격 제한 — {wait/60:.0f}분 뒤 재시도 (무료 한도 하루 20회)"
     _mark()
-    try:
-        from google import genai
-        client = genai.Client()
-        interaction = client.interactions.create(model=MODEL, input=_prompt(payload, facts))
-        text = (interaction.output_text or "").strip()
-    except Exception as error:
-        return "", f"{type(error).__name__}: {error}"
+    text, error = generate(_prompt(payload, facts))
+    if error:
+        return "", error
     if text:
         _write_cache(fingerprint_key, text)
     return text, ""
