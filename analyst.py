@@ -41,6 +41,10 @@ REVIEW_MAX_AGE = 86400 * 14
 
 # 제목에서 증권사를 뽑는다. 긴 이름을 먼저 둬야 "TD Cowen"이 "Cowen"으로 잘리지 않는다.
 BROKERS = [
+    # 목록에 없으면 그 증권사 리포트는 통째로 안 잡힌다. 실제로 Texas Capital Securities의
+    # 8/13 Buy 유지가 그렇게 빠져 있었다. 제목에서 액션 주체를 뽑아 대조해 보완했다.
+    # Wall Street Zen은 사람이 아니라 자동 평가 서비스다. 이름이 그대로 보이므로 남겨 둔다.
+    "Texas Capital Securities", "Texas Capital", "Wall Street Zen", "Rothschild & Co Redburn",
     "Cantor Fitzgerald", "Deutsche Bank", "Morgan Stanley", "Goldman Sachs", "Bank of America",
     "Wells Fargo", "Raymond James", "William Blair", "Piper Sandler", "TD Cowen", "JPMorgan",
     "J.P. Morgan", "HC Wainwright", "H.C. Wainwright", "Craig-Hallum", "Canaccord", "Oppenheimer",
@@ -144,6 +148,10 @@ QUERIES = [
     'Fermi FRMI "price target"',
     'Fermi FRMI analyst rating',
     'Fermi Inc FRMI (Mizuho OR Stifel OR UBS OR Evercore OR Macquarie OR Citizens OR Cantor)',
+    # Investing.com이 "X reiterates/cuts/raises ... on ~" 문체로 사유까지 제목에 담는다.
+    # 이 문체가 내 패턴과 가장 잘 맞는데 다른 질의에서 빠질 때가 있어 따로 건다.
+    'Fermi FRMI (reiterates OR cuts OR raises OR maintains) stock rating',
+    'Fermi FRMI analyst reaction lease deal',
 ]
 
 
@@ -375,6 +383,9 @@ def merged_actions(extra: pd.DataFrame | None = None) -> pd.DataFrame:
 # Finviz는 날짜·행동·증권사·등급전환·목표가를 표로 유지한다. 이쪽을 1차로 쓴다.
 FINVIZ_CACHE = "analyst_ratings"
 FINVIZ_MAX_AGE = 46800        # 느린층(하루 2회)
+# 같은 액션을 등급표와 기사가 며칠 차이로 담는다. Citizens 신규 커버리지가 등급표 2/9,
+# 기사 2/16으로 잡혀 같은 사건이 두 줄로 나왔다. 매체가 늦게 쓰는 경우를 감안해 열흘로 본다.
+MERGE_DAYS = 10
 
 _ROW = re.compile(r"<tr[^>]*has-label[^>]*>(.*?)</tr>", re.S)
 _CELL = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
@@ -464,20 +475,26 @@ def combined(action_frame: pd.DataFrame) -> pd.DataFrame:
                     continue
                 same = (broker.lower() in row["증권사"].lower()
                         or row["증권사"].lower().startswith(broker.lower()))
-                if same and abs((pd.Timestamp(other) - pd.Timestamp(when)).days) <= 3:
+                if same and abs((pd.Timestamp(other) - pd.Timestamp(when)).days) <= MERGE_DAYS:
                     note = text
                     break
             rows.append({**row, "시점": when, "언급된 이유": note, "출처": "등급표",
                          "링크": finviz_url})
 
-    covered = {(r["증권사"].lower()[:8], pd.Timestamp(r["시점"])) for r in rows}
+    def _class(action: str) -> str:
+        # "Resumed"(등급표)와 "initiates coverage"(기사)는 같은 사건이다. 한 부류로 묶지
+        # 않으면 Cantor 4/9가 두 줄로 나온다.
+        return "커버리지" if action in ("신규 커버리지", "커버리지 재개") else action
+
+    covered = {(r["증권사"].lower()[:8], pd.Timestamp(r["시점"]), _class(r["행동"])) for r in rows}
     if extra is not None and not extra.empty:
         for row in extra.to_dict("records"):
             when = pd.Timestamp(row["시점"]).date() if row["시점"] else None
             if when is None:
                 continue
-            near = any(key[0] == row["증권사"].lower()[:8]
-                       and abs((key[1] - pd.Timestamp(when)).days) <= 3 for key in covered)
+            near = any(key[0] == row["증권사"].lower()[:8] and key[2] == _class(row["행동"])
+                       and abs((key[1] - pd.Timestamp(when)).days) <= MERGE_DAYS
+                       for key in covered)
             if near:
                 continue
             rows.append({"시점": when, "증권사": row["증권사"], "행동": row["행동"], "등급": "–",
