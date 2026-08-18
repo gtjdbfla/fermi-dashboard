@@ -110,7 +110,9 @@ def yahoo_news() -> pd.DataFrame:
 def nasdaq_news() -> pd.DataFrame:
     try:
         response = requests.get("https://api.nasdaq.com/api/news/topic/articlebysymbol",
-                                params={"q": "FRMI|stocks", "offset": 0, "limit": 20},
+                                # limit=20이 기본이었는데 50으로 올리면 34건이 온다(실측).
+                                # 50 위로는 더 오지 않는다.
+                                params={"q": "FRMI|stocks", "offset": 0, "limit": 50},
                                 headers=JSON_UA, timeout=SLOW_TIMEOUT)
         rows = ((response.json().get("data") or {}).get("rows")) or []
     except Exception:
@@ -174,9 +176,29 @@ def contract_hits(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 # ── 디스크 캐시 ───────────────────────────────────────────────────────────────
+KEEP_ARTICLES = 800        # 누적 상한. 넘으면 오래된 것부터 버린다.
+
+
 def save_cache(articles: pd.DataFrame, chatter: pd.DataFrame) -> None:
+    """**기사는 덮지 않고 누적한다.**
+
+    구글 뉴스 RSS는 같은 질의라도 호출마다 관련도 순위가 달라져 들어오는 묶음이 바뀐다
+    (실측: 215 → 219 → 216건으로 오르내렸다). 덮어쓰면 어제 보이던 기사가 오늘 사라지고,
+    '전체 기사' 목록이 마지막 수집분에 불과해진다. 합집합으로 쌓으면 이력이 남는다.
+
+    커뮤니티 글은 Stocktwits 최신 스트림이라 덮어써도 무방하다.
+    """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    articles.to_json(ARTICLES_CACHE, orient="records", date_format="iso", force_ascii=False)
+    merged = articles
+    previous = _load(ARTICLES_CACHE, list(articles.columns))
+    if not previous.empty and not articles.empty:
+        merged = pd.concat([previous, articles], ignore_index=True)
+        merged["_key"] = (merged["title"].astype(str).str.lower()
+                          .str.replace(r"[^a-z0-9가-힣]", "", regex=True).str[:70])
+        merged = (merged.drop_duplicates("_key").drop(columns="_key")
+                        .sort_values("published", ascending=False, na_position="last")
+                        .head(KEEP_ARTICLES).reset_index(drop=True))
+    merged.to_json(ARTICLES_CACHE, orient="records", date_format="iso", force_ascii=False)
     chatter.to_json(COMMUNITY_CACHE, orient="records", date_format="iso", force_ascii=False)
 
 

@@ -37,16 +37,30 @@ FILING_BASE = "https://www.sec.gov/Archives/edgar/data/{cik}/{accn}/{doc}"
 FORM_GROUPS = [
     ("정기보고", ("10-K", "10-Q", "20-F", "10-K/A", "10-Q/A")),
     ("수시공시(중요사건)", ("8-K", "8-K/A", "6-K")),
-    ("내부자 거래", ("3", "4", "5", "3/A", "4/A", "5/A")),
+    # 144는 내부자가 팔기 전에 내는 매도 예정 신고다. '기타'로 빠져 있어서 내부자 지표에
+    # 잡히지 않았다. Form 4(체결)보다 먼저 나오므로 오히려 선행 신호에 가깝다.
+    ("내부자 거래", ()),   # INSIDER_FORMS에서 정확히 일치시킨다
     ("대량보유", ("SC 13D", "SC 13G", "SCHEDULE 13D", "SCHEDULE 13G")),
-    ("위임장·주주총회", ("DEF 14A", "DEFA14A", "DFAN14A", "PRE 14A", "PREC14A", "DEFC14A")),
-    ("증권신고·자금조달", ("S-1", "S-3", "S-8", "424B", "FWP")),
+    # 경쟁 위임장 서식(PRRN/PREN/PRER/DEFN)이 빠져 있어 24건이 '기타'로 흘렀다.
+    ("위임장·주주총회", ("DEF 14A", "DEFA14A", "DFAN14A", "PRE 14A", "PREC14A", "DEFC14A",
+                   "PRRN14A", "PREN14A", "PRER14A", "DEFN14A", "DEFR14A")),
+    ("증권신고·자금조달", ("S-1", "S-3", "S-8", "S-11", "424B", "FWP", "POS AM")),
+    # 상장·심사 과정에서 오가는 서식. 펀더멘탈과 무관하지만 '기타'에 섞이면
+    # 정말 분류 안 된 것이 무엇인지 알 수 없다.
+    ("상장·등록 절차", ("CORRESP", "UPLOAD", "DRS", "CERT", "EFFECT", "8-A12B", "RW", "AW")),
 ]
+
+
+# 내부자 서식은 숫자 하나짜리라 접두어로 맞추면 안 된다. "4"로 시작한다는 이유로
+# 424B4(투자설명서)가 내부자 거래로 분류돼 내부자 지표를 부풀리고 있었다. 정확히 일치시킨다.
+INSIDER_FORMS = {"3", "4", "5", "3/A", "4/A", "5/A", "144", "144/A"}
 
 
 def form_group(form: str) -> str:
     """공시 코드를 한글 묶음 이름으로 바꾼다. 접두어 일치까지 허용해야 SC 13D/A 같은 변형이 잡힌다."""
-    upper = (form or "").upper()
+    upper = (form or "").upper().strip()
+    if upper in INSIDER_FORMS:
+        return "내부자 거래"
     for label, prefixes in FORM_GROUPS:
         for prefix in prefixes:
             if upper.startswith(prefix):
