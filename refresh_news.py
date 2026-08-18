@@ -37,7 +37,8 @@ def warm_market() -> None:
     for label, call in [("바스켓", lambda: raw(mf.basket_frame)(force=True)),
                         ("수급", lambda: raw(mf._supply_raw)(force=True)),
                         ("시가총액", lambda: raw(sc.market_caps)(force=True)),
-                        ("애널리스트 컨센서스", lambda: raw(an.consensus)(force=True))]:
+                        ("애널리스트 컨센서스", lambda: raw(an.consensus)(force=True)),
+                        ("증권사 등급표", lambda: raw(an.ratings)(force=True))]:
         try:
             call()
             print(f"[ok] {label} 캐시 갱신")
@@ -121,7 +122,7 @@ def warm_analyst(m) -> None:
         heads = raw(an.headlines)(force=True)
         pool = raw(news.cached_articles)()
         gained = an.absorb(pool)
-        actions = an.merged_actions(pool)
+        actions = an.combined(an.merged_actions(pool))
         data = raw(an.consensus)()
         key = an.fingerprint(data, actions)
         text, error = an.review(key, an.payload(data, actions), an.facts_from(m))

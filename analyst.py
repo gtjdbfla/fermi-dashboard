@@ -368,6 +368,132 @@ def merged_actions(extra: pd.DataFrame | None = None) -> pd.DataFrame:
     return actions(pd.concat(usable, ignore_index=True))
 
 
+# ── 증권사 등급표 (Finviz) ────────────────────────────────────────────────────
+# **제목 긁기는 태생적으로 샌다.** 뉴스가 다루지 않은 리포트는 아예 안 잡히고, 목표가나
+# 등급 전환이 제목에 없으면 빈칸이 된다. 실측에서 Berenberg $37, Rothschild $31,
+# Citizens $30 같은 건이 통째로 빠져 있었고 Evercore·UBS 하향도 목표가가 비어 있었다.
+# Finviz는 날짜·행동·증권사·등급전환·목표가를 표로 유지한다. 이쪽을 1차로 쓴다.
+FINVIZ_CACHE = "analyst_ratings"
+FINVIZ_MAX_AGE = 46800        # 느린층(하루 2회)
+
+_ROW = re.compile(r"<tr[^>]*has-label[^>]*>(.*?)</tr>", re.S)
+_CELL = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
+_ACTION_KO = {"Initiated": "신규 커버리지", "Resumed": "커버리지 재개",
+              "Reiterated": "유지", "Upgrade": "상향", "Downgrade": "하향",
+              "Reinstated": "커버리지 재개"}
+
+
+def _clean(cell: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", "", cell)).strip()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def ratings(force: bool = False) -> pd.DataFrame:
+    """Finviz의 애널리스트 등급표. 컬럼: 시점·행동·증권사·등급·목표가·이전."""
+    if not force:
+        cached = dc.load_frame(FINVIZ_CACHE, FINVIZ_MAX_AGE)
+        if cached is not None:
+            return cached
+    try:
+        page = requests.get("https://finviz.com/quote.ashx", headers=UA,
+                            params={"t": TICKER}, timeout=TIMEOUT).text
+    except Exception:
+        return dc.load_frame(FINVIZ_CACHE, 86400 * 365) or pd.DataFrame()
+
+    records = []
+    for row in _ROW.findall(page):
+        cells = [_clean(c) for c in _CELL.findall(row)]
+        if len(cells) < 4:
+            continue
+        when = pd.to_datetime(cells[0], format="%b-%d-%y", errors="coerce")
+        if pd.isna(when):
+            continue                      # 등급표가 아닌 행(뉴스 등)은 날짜 형식이 다르다
+        grade, target = cells[3], (cells[4] if len(cells) > 4 else "")
+        # 목표가는 "$11" 또는 "$18 → $15" 꼴이다. 뒤가 새 목표가다.
+        amounts = re.findall(r"\$(\d[\d,]*\.?\d*)", target)
+        records.append({
+            "시점": str(when.date()),
+            "행동": _ACTION_KO.get(cells[1], cells[1]),
+            "증권사": cells[2],
+            "등급": grade,
+            "목표가": f"${float(amounts[-1].replace(',', '')):,.2f}" if amounts else "–",
+            "이전": f"${float(amounts[0].replace(',', '')):,.2f}" if len(amounts) > 1 else "–",
+        })
+    if not records:
+        return dc.load_frame(FINVIZ_CACHE, 86400 * 365) or pd.DataFrame()
+    frame = (pd.DataFrame(records).drop_duplicates(subset=["시점", "증권사", "행동"])
+               .sort_values("시점", ascending=False).reset_index(drop=True))
+    dc.save_frame(FINVIZ_CACHE, frame)
+    return frame
+
+
+def reasons_by_broker(action_frame: pd.DataFrame) -> dict:
+    """제목에서 뽑은 사유를 (증권사, 시점)별로 모아 둔다. 등급표에는 사유가 없다."""
+    if action_frame is None or action_frame.empty:
+        return {}
+    found = {}
+    for row in action_frame.to_dict("records"):
+        if row["언급된 이유"] == "–":
+            continue
+        found.setdefault((row["증권사"], row["시점"]), row["언급된 이유"])
+    return found
+
+
+def combined(action_frame: pd.DataFrame) -> pd.DataFrame:
+    """등급표와 제목 추출을 합친다. **어느 한쪽도 완전하지 않다.**
+
+    Finviz는 신규 커버리지·상향·하향을 등급 전환까지 정확히 담지만, 목표가만 조정한 건은
+    빠진다(8/14 Macquarie $15←$18, 7/28 Mizuho $11이 없었다). 반대로 제목 추출은 그런 건을
+    잡지만 뉴스가 다루지 않은 리포트를 통째로 놓친다(Berenberg $37, Rothschild $31,
+    Citizens $30이 그랬다). 그래서 합집합으로 쓰고, 같은 증권사가 3일 안쪽에 겹치면
+    등급표 쪽을 남긴다 — 등급과 목표가가 더 정확하다.
+    """
+    table = ratings()
+    extra = action_frame if action_frame is not None else pd.DataFrame()
+    columns = ["", "시점", "증권사", "행동", "등급", "목표가", "이전", "언급된 이유", "출처", "링크"]
+    finviz_url = f"https://finviz.com/quote.ashx?t={TICKER}"
+
+    rows = []
+    if table is not None and not table.empty:
+        lookup = reasons_by_broker(extra)
+        for row in table.to_dict("records"):
+            when = pd.Timestamp(row["시점"]).date()
+            note = "–"
+            for (broker, other), text in lookup.items():
+                if not other:
+                    continue
+                same = (broker.lower() in row["증권사"].lower()
+                        or row["증권사"].lower().startswith(broker.lower()))
+                if same and abs((pd.Timestamp(other) - pd.Timestamp(when)).days) <= 3:
+                    note = text
+                    break
+            rows.append({**row, "시점": when, "언급된 이유": note, "출처": "등급표",
+                         "링크": finviz_url})
+
+    covered = {(r["증권사"].lower()[:8], pd.Timestamp(r["시점"])) for r in rows}
+    if extra is not None and not extra.empty:
+        for row in extra.to_dict("records"):
+            when = pd.Timestamp(row["시점"]).date() if row["시점"] else None
+            if when is None:
+                continue
+            near = any(key[0] == row["증권사"].lower()[:8]
+                       and abs((key[1] - pd.Timestamp(when)).days) <= 3 for key in covered)
+            if near:
+                continue
+            rows.append({"시점": when, "증권사": row["증권사"], "행동": row["행동"], "등급": "–",
+                         "목표가": row["목표가"], "이전": row["이전"],
+                         "언급된 이유": row["언급된 이유"], "출처": "기사",
+                         "링크": row.get("링크", "")})
+
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    out = pd.DataFrame(rows).sort_values("시점", ascending=False).reset_index(drop=True)
+    out[""] = out["행동"].map({"상향": "🟢", "목표가 상향": "🟢", "하향": "🔴",
+                              "목표가 인하": "🔴", "신규 커버리지": "🔵",
+                              "커버리지 재개": "🔵"}).fillna("⚪")
+    return out[columns]
+
+
 # ── AI 분석 ───────────────────────────────────────────────────────────────────
 def _prompt(payload: str, facts: dict) -> str:
     return f"""너는 페르미(Fermi Inc., NASDAQ: FRMI)에 대한 증권사 애널리스트 의견을 정리하는

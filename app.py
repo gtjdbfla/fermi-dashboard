@@ -735,7 +735,7 @@ with tabs[6]:
                                    "consensus": "컨센서스"})
               [["시점", "목표주가", "매수", "보유", "매도", "컨센서스"]], height=260)
 
-    actions = an.merged_actions(nw.cached_articles())
+    actions = an.combined(an.merged_actions(nw.cached_articles()))
     heading("개별 증권사 액션", help_text=(
         "**리포트 원문이 아니라 기사 제목에서 뽑은 것이다.** 증권사 이름이 제목에 없으면 버린다 — "
         "\"FRMI Stock Price Prediction 2026\" 같은 글이 애널리스트 액션으로 섞이는 걸 막는 "
@@ -760,7 +760,7 @@ with tabs[6]:
         ])
         if reasons:
             st.caption("최근 언급된 사유 — " + " · ".join(dict.fromkeys(reasons)))
-        table(actions.drop(columns=["제목"]), column_config={
+        table(actions, column_config={
             "링크": st.column_config.LinkColumn("링크", display_text="열기"),
             "": st.column_config.TextColumn("", width="small")}, height=380)
 
