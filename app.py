@@ -681,8 +681,12 @@ with tabs[6]:
         if review:
             with st.container(border=True):
                 st.markdown(review)
-            st.caption(f"{ai_review.MODEL} · 기사 {min(len(articles), ai_review.MAX_ARTICLES)}건 + "
+            caption = (f"{ai_review.MODEL} · 기사 {min(len(articles), ai_review.MAX_ARTICLES)}건 + "
                        f"커뮤니티 {min(len(chatter), ai_review.MAX_POSTS)}건 · 지문 `{review_key}`")
+            # 갱신 대기 중이면 지금 보이는 게 직전 정리라는 사실을 밝힌다.
+            if review_error:
+                caption += f" · ⏳ {review_error}"
+            st.caption(caption)
         elif review_error:
             st.info(f"AI 정리 없음 — {review_error}", icon="🤖")
 

@@ -64,6 +64,18 @@ def _file_age(path: Path) -> float | None:
     return (time.time() - path.stat().st_mtime) if path.exists() else None
 
 
+def _key_id() -> str:
+    """쓰고 있는 API 키의 지문 6자리. 값 자체는 드러나지 않는다.
+
+    stock_dashboard와 같은 키를 쓰면 한도를 나눠 쓰는데, 화면에 표시가 없으면 분리했는지
+    확인할 방법이 없다. 두 대시보드의 이 값이 다르면 분리된 것이다.
+    """
+    import hashlib
+    import os
+    key = os.environ.get("GEMINI_API_KEY", "")
+    return hashlib.md5(key.encode()).hexdigest()[:6] if key else "없음"
+
+
 def _sector_age() -> float | None:
     """크론이 갱신한 캐시본을 먼저 본다. 없으면 저장소 커밋본의 파일 시각."""
     cached = DATA_DIR / ".cache" / "sector_annuals.csv"
@@ -151,7 +163,7 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
         records.append({
             "구분": "참고", "데이터": "AI 호출(오늘)",
             "최신 시점": " · ".join(f"{k.split('/')[-1]} {v}회" for k, v in used.items()),
-            "경과": "–", "갱신 주기": f"주 {ai_review.MODEL} / 보조 {ai_review.FALLBACK_MODEL}",
+            "경과": "–", "갱신 주기": f"{ai_review.MODEL} · 키 {_key_id()}",
             "상태": "✅",
         })
 

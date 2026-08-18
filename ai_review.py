@@ -22,10 +22,14 @@ MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 MAX_ARTICLES = 40
 MAX_POSTS = 20
 
-# 무료 티어 하루 20회를 지키기 위한 최소 호출 간격. 2시간이면 하루 최대 12회라
-# 공시 판독(새 8-K가 있을 때만 부른다) 몫이 남는다.
+# 한도를 넘기지 않기 위한 최소 호출 간격.
+#
+# 처음엔 flash(하루 20회)를 stock_dashboard와 나눠 쓰느라 3시간까지 늘렸는데, 그러면
+# 화면에 "133분 뒤 재시도"가 뜬 채로 몇 시간을 보낸다. 지금은 flash-lite로 갈라 썼고
+# 실제 사용량이 하루 3회 수준이라 그렇게까지 조일 이유가 없다. 1시간이면 용도당 최대
+# 24회이고, 지문이 바뀔 때만 부르므로 실제로는 그보다 훨씬 적다.
 RATE_CACHE = "ai_rate"
-MIN_INTERVAL = float(os.environ.get("GEMINI_MIN_INTERVAL", 10800))
+MIN_INTERVAL = float(os.environ.get("GEMINI_MIN_INTERVAL", 3600))
 
 # 결과를 디스크에도 남긴다. st.cache_data는 프로세스 메모리라 컨테이너를 다시 세우면 날아가고,
 # 그러면 배포할 때마다 첫 접속자가 API 응답을 기다린다. data/는 볼륨이라 재기동을 견딘다.
@@ -198,19 +202,27 @@ def _mark(cache: str = RATE_CACHE) -> None:
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def analyze(fingerprint_key: str, payload: str, facts: dict) -> tuple[str, str]:
-    """(분석 텍스트, 오류) — 지문이 같으면 디스크 캐시에서 바로 돌려준다."""
-    cached = _read_cache().get(fingerprint_key)
+    """(분석 텍스트, 오류) — 지문이 같으면 디스크 캐시에서 바로 돌려준다.
+
+    새로 만들 수 없을 때는 **직전 정리를 돌려준다.** 예전에는 빈 문자열을 줘서 화면에
+    "AI 정리 없음 — 호출 간격 제한"만 떴는데, 캐시에 바로 전 정리가 멀쩡히 있는데도
+    아무것도 안 보여주는 건 손해다. 언제 만든 것인지만 밝히면 된다.
+    """
+    store = _read_cache()
+    cached = store.get(fingerprint_key)
     if cached:
         return cached, ""
+    previous = list(store.values())[-1] if store else ""
+
     if not available():
-        return "", "GEMINI_API_KEY가 설정되지 않았다."
+        return previous, "GEMINI_API_KEY가 설정되지 않았다."
     wait = _too_soon()
     if wait:
-        return "", f"호출 간격 제한 — {wait/60:.0f}분 뒤 재시도 (무료 한도 하루 20회)"
+        return previous, f"직전 생성 후 {wait/60:.0f}분 뒤 갱신 예정"
     _mark()
     text, error = generate(_prompt(payload, facts))
     if error:
-        return "", error
+        return previous, error
     if text:
         _write_cache(fingerprint_key, text)
     return text, ""
