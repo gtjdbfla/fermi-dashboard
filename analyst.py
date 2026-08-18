@@ -75,8 +75,9 @@ ACTIONS = [
 # "to $15 from $18" — 앞이 새 목표가, 뒤가 이전 목표가다.
 _TO_FROM = re.compile(r"to\s+\$(\d[\d,]*\.?\d*)\s+from\s+\$(\d[\d,]*\.?\d*)", re.I)
 # 같은 리포트가 여러 각도로 보도될 때 어느 표현을 대표로 삼을지. 방향이 분명한 쪽이 앞이다.
-ACTION_RANK = {"신규 커버리지": 0, "하향": 1, "상향": 1, "목표가 인하": 2, "목표가 상향": 2,
-               "목표가 조정": 3, "목표가 제시": 4, "유지": 5}
+ACTION_RANK = {"신규 커버리지": 0, "커버리지 재개": 0, "하향": 1, "상향": 1,
+               "목표가 인하": 2, "목표가 상향": 2, "목표가 조정": 3, "목표가 제시": 4,
+               "유지": 5}
 DIRECTION_ICON = {"up": "🟢", "down": "🔴", "new": "🔵", "flat": "⚪"}
 
 
@@ -387,6 +388,101 @@ FINVIZ_MAX_AGE = 46800        # 느린층(하루 2회)
 # 기사 2/16으로 잡혀 같은 사건이 두 줄로 나왔다. 매체가 늦게 쓰는 경우를 감안해 열흘로 본다.
 MERGE_DAYS = 10
 
+# ── 증권사 등급표: 세 소스를 합친다 ───────────────────────────────────────────
+# 어느 하나도 완전하지 않다(2026-08-18 실측).
+#   Finviz    11건 — 등급 전환과 목표가는 정확한데 '유지'가 빠진다
+#   Yahoo     18건 — 유지까지 포함해 가장 많은데 목표가가 없다
+#   TipRanks  10건 — 증권사별 최신 1건뿐이지만 목표가와 직전 목표가가 있고 8월 건이 가장 많다
+# 셋을 합쳐야 빠짐이 줄어든다.
+YAHOO_ACTION = {"init": "신규 커버리지", "up": "상향", "down": "하향", "main": "유지",
+                "reit": "유지"}
+TIPRANKS_RATING = {1: "Buy", 2: "Hold", 3: "Sell"}
+# 소스마다 이름 표기가 다르다. 같은 증권사가 여러 줄로 남지 않게 대표명으로 모은다.
+_ALIAS = [
+    ("Rothschild", "Rothschild & Co Redburn"), ("Evercore", "Evercore ISI"),
+    ("Citizens", "Citizens JMP"), ("Stifel", "Stifel Nicolaus"), ("Mizuho", "Mizuho"),
+    ("Berenberg", "Berenberg"), ("Cantor", "Cantor Fitzgerald"),
+    ("Texas Capital", "Texas Capital Securities"), ("Macquarie", "Macquarie"), ("UBS", "UBS"),
+]
+
+
+def canonical(firm: str) -> str:
+    """'Evercore ISI Group'과 'Evercore ISI'를 한 이름으로."""
+    text = (firm or "").strip()
+    for needle, name in _ALIAS:
+        if needle.lower() in text.lower():
+            return name
+    return text
+
+
+def _yahoo_crumb(session: requests.Session) -> str:
+    """Yahoo quoteSummary는 crumb 없이는 401을 준다. 쿠키를 먼저 받아 crumb을 얻는다."""
+    session.get("https://fc.yahoo.com", timeout=TIMEOUT)
+    return session.get("https://query1.finance.yahoo.com/v1/test/getcrumb",
+                       timeout=TIMEOUT).text.strip()
+
+
+def yahoo_grades() -> list[dict]:
+    """Yahoo의 등급 변경 이력. 유지(main)까지 담기지만 목표가는 없다."""
+    try:
+        session = requests.Session()
+        session.headers.update(UA)
+        crumb = _yahoo_crumb(session)
+        payload = session.get(
+            "https://query2.finance.yahoo.com/v10/finance/quoteSummary/" + TICKER,
+            params={"modules": "upgradeDowngradeHistory,financialData", "crumb": crumb},
+            timeout=TIMEOUT).json()
+        result = payload["quoteSummary"]["result"][0]
+    except Exception:
+        return []
+    rows = []
+    for item in (result.get("upgradeDowngradeHistory") or {}).get("history") or []:
+        when = pd.to_datetime(item.get("epochGradeDate"), unit="s", errors="coerce")
+        if pd.isna(when):
+            continue
+        to_grade, from_grade = item.get("toGrade") or "", item.get("fromGrade") or ""
+        rows.append({
+            "시점": str(when.date()),
+            "행동": YAHOO_ACTION.get(item.get("action"), item.get("action") or "유지"),
+            "증권사": canonical(item.get("firm")),
+            "등급": f"{from_grade} → {to_grade}" if from_grade and from_grade != to_grade else to_grade,
+            "목표가": "–", "이전": "–", "_src": "Yahoo",
+        })
+    return rows
+
+
+def tipranks_grades() -> list[dict]:
+    """TipRanks의 증권사별 최신 등급. 목표가와 직전 목표가가 함께 온다."""
+    try:
+        payload = requests.get("https://www.tipranks.com/api/stocks/getData/",
+                               params={"name": TICKER}, headers=JSON_UA, timeout=TIMEOUT).json()
+    except Exception:
+        return []
+    rows = []
+    for expert in payload.get("experts") or []:
+        if expert.get("eTypeId") != 1 or not expert.get("firm"):
+            continue                      # 블로거·커뮤니티는 애널리스트가 아니다
+        for rating in expert.get("ratings") or []:
+            when = pd.to_datetime(rating.get("date"), errors="coerce")
+            if pd.isna(when):
+                continue
+            target = rating.get("priceTarget")
+            previous = rating.get("oldPriceTarget")
+            action = "신규 커버리지" if rating.get("actionId") == 1 else "유지"
+            if target and previous:
+                action = "목표가 인하" if target < previous else (
+                    "목표가 상향" if target > previous else "유지")
+            rows.append({
+                "시점": str(when.date()), "행동": action,
+                "증권사": canonical(expert.get("firm")),
+                "등급": TIPRANKS_RATING.get(rating.get("ratingId"), "–"),
+                "목표가": f"${float(target):,.2f}" if target else "–",
+                "이전": f"${float(previous):,.2f}" if previous else "–",
+                "_src": "TipRanks",
+            })
+    return rows
+
+
 _ROW = re.compile(r"<tr[^>]*has-label[^>]*>(.*?)</tr>", re.S)
 _CELL = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
 _ACTION_KO = {"Initiated": "신규 커버리지", "Resumed": "커버리지 재개",
@@ -400,18 +496,44 @@ def _clean(cell: str) -> str:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def ratings(force: bool = False) -> pd.DataFrame:
-    """Finviz의 애널리스트 등급표. 컬럼: 시점·행동·증권사·등급·목표가·이전."""
+    """Finviz + Yahoo + TipRanks를 합친 등급표. 컬럼: 시점·행동·증권사·등급·목표가·이전."""
     if not force:
         cached = dc.load_frame(FINVIZ_CACHE, FINVIZ_MAX_AGE)
         if cached is not None:
             return cached
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        finviz = pool.submit(_finviz_rows)
+        yahoo = pool.submit(yahoo_grades)
+        tipranks = pool.submit(tipranks_grades)
+        rows = finviz.result() + yahoo.result() + tipranks.result()
+
+    if not rows:
+        return dc.load_frame(FINVIZ_CACHE, 86400 * 365) or pd.DataFrame()
+
+    frame = pd.DataFrame(rows)
+    frame["증권사"] = frame["증권사"].map(canonical)
+    # 같은 증권사·같은 날의 같은 행동은 한 사건이다. 정보가 많은 줄(목표가·등급이 채워진 쪽)을 남긴다.
+    frame["_점수"] = ((frame["목표가"] != "–").astype(int) * 2
+                    + (frame["등급"].fillna("–") != "–").astype(int)
+                    + (frame["이전"] != "–").astype(int))
+    frame = (frame.sort_values(["_점수"], ascending=False)
+                  .drop_duplicates(subset=["시점", "증권사", "행동"], keep="first")
+                  .drop(columns="_점수")
+                  .sort_values("시점", ascending=False)
+                  .reset_index(drop=True))
+    dc.save_frame(FINVIZ_CACHE, frame)
+    return frame
+
+
+def _finviz_rows() -> list[dict]:
+    """Finviz 등급표. 등급 전환과 목표가가 정확하지만 '유지'는 담기지 않는다."""
     try:
         page = requests.get("https://finviz.com/quote.ashx", headers=UA,
                             params={"t": TICKER}, timeout=TIMEOUT).text
     except Exception:
-        return dc.load_frame(FINVIZ_CACHE, 86400 * 365) or pd.DataFrame()
-
-    records = []
+        return []
+    rows = []
     for row in _ROW.findall(page):
         cells = [_clean(c) for c in _CELL.findall(row)]
         if len(cells) < 4:
@@ -419,23 +541,18 @@ def ratings(force: bool = False) -> pd.DataFrame:
         when = pd.to_datetime(cells[0], format="%b-%d-%y", errors="coerce")
         if pd.isna(when):
             continue                      # 등급표가 아닌 행(뉴스 등)은 날짜 형식이 다르다
-        grade, target = cells[3], (cells[4] if len(cells) > 4 else "")
-        # 목표가는 "$11" 또는 "$18 → $15" 꼴이다. 뒤가 새 목표가다.
+        target = cells[4] if len(cells) > 4 else ""
         amounts = re.findall(r"\$(\d[\d,]*\.?\d*)", target)
-        records.append({
+        rows.append({
             "시점": str(when.date()),
             "행동": _ACTION_KO.get(cells[1], cells[1]),
-            "증권사": cells[2],
-            "등급": grade,
+            "증권사": canonical(cells[2]),
+            "등급": cells[3],
             "목표가": f"${float(amounts[-1].replace(',', '')):,.2f}" if amounts else "–",
             "이전": f"${float(amounts[0].replace(',', '')):,.2f}" if len(amounts) > 1 else "–",
+            "_src": "Finviz",
         })
-    if not records:
-        return dc.load_frame(FINVIZ_CACHE, 86400 * 365) or pd.DataFrame()
-    frame = (pd.DataFrame(records).drop_duplicates(subset=["시점", "증권사", "행동"])
-               .sort_values("시점", ascending=False).reset_index(drop=True))
-    dc.save_frame(FINVIZ_CACHE, frame)
-    return frame
+    return rows
 
 
 def reasons_by_broker(action_frame: pd.DataFrame) -> dict:
@@ -451,13 +568,17 @@ def reasons_by_broker(action_frame: pd.DataFrame) -> dict:
 
 
 def combined(action_frame: pd.DataFrame) -> pd.DataFrame:
-    """등급표와 제목 추출을 합친다. **어느 한쪽도 완전하지 않다.**
+    """등급표 3소스와 제목 추출을 합쳐 **증권사·날짜당 한 줄**로 만든다.
 
-    Finviz는 신규 커버리지·상향·하향을 등급 전환까지 정확히 담지만, 목표가만 조정한 건은
-    빠진다(8/14 Macquarie $15←$18, 7/28 Mizuho $11이 없었다). 반대로 제목 추출은 그런 건을
-    잡지만 뉴스가 다루지 않은 리포트를 통째로 놓친다(Berenberg $37, Rothschild $31,
-    Citizens $30이 그랬다). 그래서 합집합으로 쓰고, 같은 증권사가 3일 안쪽에 겹치면
-    등급표 쪽을 남긴다 — 등급과 목표가가 더 정확하다.
+    어느 소스도 완전하지 않다(2026-08-18 실측).
+      Finviz    등급 전환과 목표가는 정확한데 '유지'가 빠진다
+      Yahoo     '유지'까지 담아 가장 많은데 목표가가 없다
+      TipRanks  증권사별 최신 1건뿐이지만 목표가와 직전 목표가가 있다
+      기사 제목  위 셋이 놓친 목표가 조정과 **인하 사유**를 담는다
+
+    같은 리포트를 소스마다 다르게 적는다. Yahoo는 등급을 안 바꿨으니 '유지'라 하고,
+    기사는 목표가를 내렸으니 '목표가 인하'라 한다. 같은 사건이므로 한 줄로 묶고, 방향이
+    분명한 행동을 대표로 삼아 나머지 줄에서 등급·목표가·사유를 끌어와 채운다.
     """
     table = ratings()
     extra = action_frame if action_frame is not None else pd.DataFrame()
@@ -466,45 +587,65 @@ def combined(action_frame: pd.DataFrame) -> pd.DataFrame:
 
     rows = []
     if table is not None and not table.empty:
-        lookup = reasons_by_broker(extra)
         for row in table.to_dict("records"):
-            when = pd.Timestamp(row["시점"]).date()
-            note = "–"
-            for (broker, other), text in lookup.items():
-                if not other:
-                    continue
-                same = (broker.lower() in row["증권사"].lower()
-                        or row["증권사"].lower().startswith(broker.lower()))
-                if same and abs((pd.Timestamp(other) - pd.Timestamp(when)).days) <= MERGE_DAYS:
-                    note = text
-                    break
-            rows.append({**row, "시점": when, "언급된 이유": note, "출처": "등급표",
-                         "링크": finviz_url})
-
-    def _class(action: str) -> str:
-        # "Resumed"(등급표)와 "initiates coverage"(기사)는 같은 사건이다. 한 부류로 묶지
-        # 않으면 Cantor 4/9가 두 줄로 나온다.
-        return "커버리지" if action in ("신규 커버리지", "커버리지 재개") else action
-
-    covered = {(r["증권사"].lower()[:8], pd.Timestamp(r["시점"]), _class(r["행동"])) for r in rows}
+            rows.append({
+                "시점": pd.Timestamp(row["시점"]).date(), "증권사": canonical(row["증권사"]),
+                "행동": row["행동"], "등급": row.get("등급", "–"),
+                "목표가": row.get("목표가", "–"), "이전": row.get("이전", "–"),
+                "언급된 이유": "–", "출처": row.get("_src", "등급표"), "링크": finviz_url,
+            })
     if extra is not None and not extra.empty:
         for row in extra.to_dict("records"):
-            when = pd.Timestamp(row["시점"]).date() if row["시점"] else None
-            if when is None:
+            if not row["시점"]:
                 continue
-            near = any(key[0] == row["증권사"].lower()[:8] and key[2] == _class(row["행동"])
-                       and abs((key[1] - pd.Timestamp(when)).days) <= MERGE_DAYS
-                       for key in covered)
-            if near:
-                continue
-            rows.append({"시점": when, "증권사": row["증권사"], "행동": row["행동"], "등급": "–",
-                         "목표가": row["목표가"], "이전": row["이전"],
-                         "언급된 이유": row["언급된 이유"], "출처": "기사",
-                         "링크": row.get("링크", "")})
-
+            rows.append({
+                "시점": pd.Timestamp(row["시점"]).date(), "증권사": canonical(row["증권사"]),
+                "행동": row["행동"], "등급": "–", "목표가": row["목표가"], "이전": row["이전"],
+                "언급된 이유": row["언급된 이유"], "출처": "기사", "링크": row.get("링크", ""),
+            })
     if not rows:
         return pd.DataFrame(columns=columns)
-    out = pd.DataFrame(rows).sort_values("시점", ascending=False).reset_index(drop=True)
+
+    frame = pd.DataFrame(rows)
+    frame["_순위"] = frame["행동"].map(lambda a: ACTION_RANK.get(a, 99))
+    merged = []
+    for _, group in frame.groupby(["증권사", "시점"], dropna=False):
+        group = group.sort_values("_순위")
+        best = group.iloc[0].to_dict()
+        for column in ("등급", "목표가", "이전", "언급된 이유", "링크"):
+            if best.get(column) in ("–", "", None):
+                filled = group[~group[column].isin(["–", "", None])]
+                if not filled.empty:
+                    best[column] = filled.iloc[0][column]
+        # 여러 소스가 같은 사건을 담았다면 그 사실을 밝힌다.
+        sources = list(dict.fromkeys(group["출처"]))
+        best["출처"] = " + ".join(sources[:3])
+        merged.append(best)
+
+    out = pd.DataFrame(merged).sort_values("시점", ascending=False).reset_index(drop=True)
+
+    # 매체가 며칠 늦게 쓴 기사가 별도 사건으로 남는다(Citizens 신규 커버리지가 등급표 2/9,
+    # 기사 2/16으로 갈렸다). 같은 증권사의 같은 부류 행동이 MERGE_DAYS 안에 다시 나오면
+    # 먼저 일어난 쪽(실제 액션 날짜)에 접는다.
+    def _class(action: str) -> str:
+        return "커버리지" if action in ("신규 커버리지", "커버리지 재개") else action
+
+    keep, seen = [], []
+    for row in out.sort_values("시점").to_dict("records"):
+        key = (row["증권사"], _class(row["행동"]))
+        hit = next((k for k in seen if k[0] == key
+                    and abs((pd.Timestamp(row["시점"]) - pd.Timestamp(k[1])).days) <= MERGE_DAYS),
+                   None)
+        if hit:
+            target = keep[hit[2]]
+            for column in ("등급", "목표가", "이전", "언급된 이유"):
+                if target.get(column) in ("–", "", None) and row.get(column) not in ("–", "", None):
+                    target[column] = row[column]
+            continue
+        seen.append((key, row["시점"], len(keep)))
+        keep.append(row)
+
+    out = pd.DataFrame(keep).sort_values("시점", ascending=False).reset_index(drop=True)
     out[""] = out["행동"].map({"상향": "🟢", "목표가 상향": "🟢", "하향": "🔴",
                               "목표가 인하": "🔴", "신규 커버리지": "🔵",
                               "커버리지 재개": "🔵"}).fillna("⚪")
