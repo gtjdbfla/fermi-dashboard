@@ -29,12 +29,45 @@ import diskcache as dc
 SEEN_CACHE = "alerts_seen"
 SEEN_MAX_AGE = 86400 * 3650      # 사실상 만료 없음. 중복 발송을 막는 것이 목적이다.
 SEEN_KEEP = 400                  # 무한정 쌓이지 않게 최근 것만 남긴다.
-# 이보다 오래된 사건은 기록만 하고 보내지 않는다.
+# 오래된 사건은 기록만 하고 보내지 않는다.
 #
-# 감지기를 새로 붙일 때마다 그 감지기가 보는 과거 공시가 전부 '처음 보는 것'이 되어 한꺼번에
-# 터진다. 경영권 분쟁 감지를 붙였을 때 실제로 9건이 대기했다. 석 달 전 공시를 지금 알림으로
-# 받아봐야 쓸모도 없다.
+# 감지기를 새로 붙이면 그 감지기가 보는 과거 공시가 전부 '처음 보는 것'이 되어 한꺼번에
+# 터진다. 경영권 분쟁 감지를 붙였을 때 실제로 9건이 대기했다.
+#
+# **뉴스는 훨씬 짧게 잡는다.** 구글 뉴스는 같은 사건을 여러 매체가 며칠에 걸쳐 쓰고, RSS가
+# 그걸 뒤늦게 노출한다. 실제로 8/10 계약 기사가 8/19에 새로 떠올라 알림이 나갔다 — 9일 전
+# 일이라 이미 알고 있는 소식이었다. 공시는 접수 자체가 사건이라 14일을 둬도 되지만
+# 뉴스는 이틀만 본다.
 MAX_EVENT_AGE_DAYS = 14
+NEWS_MAX_AGE_DAYS = 2
+
+# 같은 사건을 여러 매체가 쓴다. 기사 단위로 중복을 빼면 매체 수만큼 알림이 간다.
+# 제목에서 흔한 말을 걷어낸 낱말 묶음을 사건 지문으로 삼아, 한 번 알린 사건은 이 기간 동안
+# 다시 알리지 않는다.
+TOPIC_WINDOW_DAYS = 21
+_STOP = {"fermi", "frmi", "nasdaq", "inc", "stock", "shares", "the", "a", "an", "of", "in",
+         "on", "for", "to", "and", "with", "at", "as", "after", "its", "is", "are", "по",
+         "says", "amid", "from", "by", "new", "us", "it", "that", "this"}
+
+
+def topic_key(title: str) -> str:
+    """제목에서 흔한 말을 걷어낸 낱말 묶음. 매체가 달라도 같은 사건이면 크게 겹친다.
+
+    앞뒤를 잘라 고정 길이로 만들면 안 된다. 단어 하나만 늘어도 잘리는 지점이 달라져
+    다른 지문이 되고, 같은 소식이 두 번 나간다(실측으로 확인).
+    """
+    words = re.findall(r"[a-z0-9]+", (title or "").lower())
+    return "|".join(sorted({w for w in words if w not in _STOP and len(w) > 2}))
+
+
+def same_topic(one: str, other: str, threshold: float = 0.55) -> bool:
+    """두 지문이 같은 사건인지. 낱말 겹침 비율로 본다."""
+    left, right = set(one.split("|")), set(other.split("|"))
+    if not left or not right:
+        return False
+    return len(left & right) / len(left | right) >= threshold
+
+
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "")
 TIMEOUT = 15
 
@@ -99,7 +132,7 @@ def _seen() -> dict:
     return dc.load_json(SEEN_CACHE, SEEN_MAX_AGE) or {}
 
 
-def _remember(store: dict, ids, first_run_done: bool = True) -> None:
+def _remember(store: dict, ids, first_run_done: bool = True, topics: dict | None = None) -> None:
     stamp = pd.Timestamp.now(tz="UTC").isoformat()
     sent = dict(store.get("ids") or {})
     for key in ids:
@@ -112,7 +145,9 @@ def _remember(store: dict, ids, first_run_done: bool = True) -> None:
                               "last_sent": store.get("last_sent"),
                               # 스냅샷을 빠뜨리면 매 실행이 '이전 값 없음'이 되어
                               # 분기 실적 변화를 영원히 못 잡는다.
-                              "snapshot": store.get("snapshot")})
+                              "snapshot": store.get("snapshot"),
+                              # 사건 지문을 빠뜨리면 같은 소식을 매체 수만큼 다시 보낸다.
+                              "topics": dict(list((topics or store.get("topics") or {}).items())[-SEEN_KEEP:])})
 
 
 # ── 감지 ──────────────────────────────────────────────────────────────────────
@@ -183,6 +218,7 @@ def news_events(articles: pd.DataFrame) -> list[dict]:
             "url": getattr(row, "url", ""),
             "excerpt": "",
             "source": getattr(row, "source", ""),
+            "topic": topic_key(title),
         })
     return events
 
@@ -250,6 +286,7 @@ def tenant_events(names: list[str] | None = None) -> list[dict]:
                 "title": title.strip(),
                 "url": item.findtext("link") or "",
                 "source": source.strip() or "Google News",
+                "topic": topic_key(title),
             })
     return events
 
@@ -399,21 +436,40 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
     current = snapshot(m, steps_done)
     changes = state_events(current, store.get("snapshot") or {})
 
-    # 오래된 건 기록만 하고 넘어간다(위 MAX_EVENT_AGE_DAYS 설명 참고).
-    cutoff = pd.Timestamp.today().normalize() - pd.Timedelta(days=MAX_EVENT_AGE_DAYS)
-    fresh, aged_ids = [], []
+    # 오래된 건 기록만 하고 넘어간다. 뉴스는 훨씬 짧게 본다(위 설명 참고).
+    today = pd.Timestamp.today().normalize()
+    topics = dict(store.get("topics") or {})
+    fresh, aged_ids, new_topics = [], [], {}
     for event in events:
         if event["id"] in known:
             continue
+        limit = NEWS_MAX_AGE_DAYS if event["tier"] in ("미확인", "테넌트") else MAX_EVENT_AGE_DAYS
         when = pd.to_datetime(event.get("when"), errors="coerce")
-        (aged_ids.append(event["id"]) if pd.notna(when) and when < cutoff
-         else fresh.append(event))
+        if pd.notna(when) and (today - when).days > limit:
+            aged_ids.append(event["id"])
+            continue
+        # 같은 사건을 다른 매체가 다시 쓴 경우. 이미 알린 사건이면 조용히 기록만 한다.
+        topic = event.get("topic")
+        if topic:
+            now = pd.Timestamp.now(tz="UTC")
+            recent = any(same_topic(topic, seen_topic)
+                         and pd.notna(pd.to_datetime(when_sent, errors="coerce"))
+                         and (now - pd.to_datetime(when_sent, errors="coerce")).days <= TOPIC_WINDOW_DAYS
+                         for seen_topic, when_sent in {**topics, **new_topics}.items())
+            if recent:
+                aged_ids.append(event["id"])
+                continue
+            new_topics[topic] = now.isoformat()
+        fresh.append(event)
     fresh_changes = [event for event in changes if event["id"] not in known]
 
     if first_run:
         # 과거 것을 몰아 보내지 않는다. 지금 상태를 기준선으로 삼는다.
         store["snapshot"] = current
-        _remember(store, [event["id"] for event in events], first_run_done=True)
+        seeded_topics = {e["topic"]: pd.Timestamp.now(tz="UTC").isoformat()
+                         for e in events if e.get("topic")}
+        _remember(store, [event["id"] for event in events], first_run_done=True,
+                  topics={**(store.get("topics") or {}), **seeded_topics})
         ok, error = send(
             "✅ <b>페르미 알림 켜짐</b>\n\n"
             f"감시 중: 8-K Item {' / '.join(WATCHED_ITEMS)} · 계약 키워드 기사 · "
@@ -449,7 +505,10 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
         store["snapshot"] = current
     store["last_sent"] = pd.Timestamp.now(tz="UTC").isoformat() if sent else store.get("last_sent")
     # 실패한 건은 기억하지 않는다. 다음 크론에서 다시 시도한다.
-    _remember(store, sent + aged_ids, first_run_done=True)
+    sent_topics = {e["topic"]: new_topics[e["topic"]] for e in fresh
+                   if e.get("topic") in new_topics and e["id"] in sent}
+    _remember(store, sent + aged_ids, first_run_done=True,
+              topics={**(store.get("topics") or {}), **sent_topics})
     return {"sent": len(sent), "skipped": len(events) - len(fresh), "seeded": False,
             "error": "; ".join(failures[:3])}
 
