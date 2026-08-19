@@ -303,48 +303,62 @@ with tabs[1]:
         "**계약이 있어도 무너질 수 있다.** New Fortress가 그랬다 — 계약 자체는 있었는데 "
         "계약에서 현금이 들어오기 전에 부채 만기가 먼저 와서 재융자에 실패했고, 영업현금흐름이 "
         "+$602M에서 -$583M으로 뒤집혔다. 붕괴 4곳 중 **계약을 갖고도** 무너진 유일한 사례다.\n\n"
-        "그래서 두 시점의 순서만 본다 — 리스에서 돈이 들어오는 때와, 갚아야 하는 때.\n\n"
-        "값은 `data/contracts.csv`(리스 기간)와 `data/capital_events.csv`(차입 만기)에서 "
-        "계산한다. 문장에 박아두면 새 사채가 발행돼도 화면이 그대로다."))
+        "**만기 연도만 비교하면 가려진다.** 만기가 리스보다 늦어도 그때까지 들어올 수입이 "
+        "갚아야 할 금액에 못 미치면 재융자를 해야 한다. 그래서 금액과 시점을 함께 본다.\n\n"
+        "수치는 `data/capital_events.csv`(10-Q 2026 Q2 Note 5 기준)와 `data/contracts.csv`에서 "
+        "읽는다. 약정 기한은 `data/covenants.csv`에 따로 둔다 — 만기보다 먼저 오기 때문이다."))
     st.caption(fresh.tab_line("maturity", m, price_frame))
 
     mv = mt.verdict(m)
-    schedule = mt.schedule()
-    leases = schedule[schedule["구분"] == "리스 유입"].dropna(subset=["종료"])
-    debts = schedule[schedule["구분"] == "부채 만기"]
-    known = debts.dropna(subset=["종료"])
     metric_row([
-        ("판정", f"{th.STATUS_ICON[mv['status']]} {mv['verdict'].split(' — ')[0]}",
-         mv["verdict"]),
-        ("리스 종료", str(leases["종료"].max().year) + "년" if not leases.empty else "–",
-         "구속력 있는 계약의 마지막 해"),
-        ("가장 이른 부채 만기", str(known["종료"].min().year) + "년" if not known.empty else "–",
+        ("판정", f"{th.STATUS_ICON[mv['status']]} {mv['verdict'].split(' — ')[0]}", mv["verdict"]),
+        ("가장 이른 만기", str(pd.Timestamp(mv["due_date"]).date()) if mv.get("due_date") is not None else "–",
          "이 시점이 관문이다"),
-        ("여유", f"{mv['gap_years']:+.0f}년" if mv.get("gap_years") is not None else "–",
-         "리스 종료 − 최초 만기"),
+        ("상환액", f"${mv['due_amount']:,.0f}M" if mv.get("due_amount") else "–", "그때 갚아야 할 금액"),
+        ("그때까지 리스 수입", f"{mv['cover']*100:.0f}%" if mv.get("cover") is not None else "–",
+         f"연 약 ${mv['annual']:,.0f}M · {pd.Timestamp(mv['lease_start']).date()}부터"
+         if mv.get("annual") else ""),
     ])
 
+    # ── 약정 기한 — 만기보다 먼저 온다 ────────────────────────────────────────
+    rules = mt.covenants()
+    if not rules.empty:
+        heading("⏳ 만기보다 먼저 오는 약정 기한", help_text=(
+            "차입 계약에 **테넌트를 언제까지 잡아야 하는지**가 조건으로 붙어 있다. 만기가 아니라 "
+            "이 날짜가 먼저 온다. 지키지 못하면 상환 부담이 즉시 커지므로, 계약 커버리지(판정 ①)와 "
+            "직접 연결된 기한이다."))
+        for row in rules.to_dict("records"):
+            days = int(row["남은 일수"])
+            icon = "🔴" if days < 30 else ("🟡" if days < 90 else "⚪")
+            st.markdown(f"{icon} **{row['deadline'].date()} · D-{days}** — {row['facility']}")
+            st.caption(f"조건: {row['condition']}  ·  미충족 시: {row['consequence']}")
+
+    st.divider()
+    schedule = mt.schedule()
     if not schedule.empty:
         # 유입과 상환을 같은 시간축에 놓아야 순서가 눈에 들어온다.
         palette = th.palette()
         figure = go.Figure()
-        for index, row in enumerate(schedule.dropna(subset=["시작"]).to_dict("records")):
+        drawable = schedule[schedule["금액(백만$)"].fillna(0) > 0].dropna(subset=["시작"])
+        for index, row in enumerate(drawable.to_dict("records")):
             end = row["종료"] if pd.notna(row["종료"]) else row["시작"] + pd.DateOffset(months=6)
             inflow = row["구분"] == "리스 유입"
             figure.add_scatter(
                 x=[row["시작"], end], y=[index, index], mode="lines+markers",
                 line=dict(color=palette["series"][0] if inflow else palette["series"][1],
-                          width=10 if inflow else 6,
+                          width=12 if inflow else 6,
                           dash="solid" if pd.notna(row["종료"]) else "dot"),
                 marker=dict(size=8), name=row["항목"], showlegend=False,
-                hovertemplate=f"{row['항목']}<br>%{{x|%Y-%m}}<extra></extra>")
-        th.style(figure, height=260)
+                hovertemplate=f"{row['항목']}<br>${row['금액(백만$)']:,.0f}M"
+                              "<br>%{x|%Y-%m}<extra></extra>")
+        for rule in (rules.to_dict("records") if not rules.empty else []):
+            figure.add_vline(x=rule["deadline"], line=dict(color=palette["series"][2], dash="dot"))
+        th.style(figure, height=280)
         figure.update_yaxes(showticklabels=False)
         st.plotly_chart(figure, use_container_width=True)
-        st.caption("굵은 선이 리스 유입, 가는 선이 차입. **점선은 만기를 확인하지 못한 것**이다.")
+        st.caption("굵은 선이 리스 유입, 가는 선이 차입. 점선 세로줄이 약정 기한이다.")
 
     table(mt.view(schedule))
-
     note(mv["detail"], label="이 판정의 근거")
 
 # ── ② 현금흐름 전환 ───────────────────────────────────────────────────────────

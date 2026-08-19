@@ -1,6 +1,9 @@
-period,date,instrument,gross_musd,net_musd,dilutive,terms,source
-2025 Q4,2025-10-01,IPO(보통주 신규 상장),745.6,,Y,나스닥 상장 공모,10-K FY2025 (ProceedsFromIssuanceInitialPublicOffering)
-2025,2025-12-31,전환사채,75.5,,Y,상장 전 전환사채,10-K FY2025 (ProceedsFromConvertibleDebt)
-2026 Q1,2026-03-31,장비금융 차입,430.8,,N,PP&E 취득 자금. 담보부 차입,10-Q 2026 Q1 (ProceedsFromIssuanceOfDebt)
-2026 Q2,2026-06-30,장비금융 차입 순증,98.8,,N,총차입금 421.3 -> 520.1백만달러,2026 Q2 8-K
-2026 Q3,2026-07-09,전환사채 5.00% 2031년 만기,431.3,416.8,조건부,전환가 $9.52 / capped call 상한 $14.64(참조가 $7.32의 100% 프리미엄) / capped call 비용 34.5백만달러 / 정기상환·재무유지약정 없음,2026 Q2 8-K
+period,date,instrument,gross_musd,net_musd,dilutive,maturity,outstanding_musd,rate,terms,source
+2025 Q4,2025-10-01,IPO(보통주 신규 상장),745.6,,Y,,,,나스닥 상장 공모,10-K FY2025 (ProceedsFromIssuanceInitialPublicOffering)
+2025,2025-12-31,전환사채(상장 전 Series A·Seed),75.5,,Y,,,,상장 시 보통주로 전환됨,10-K FY2025 (ProceedsFromConvertibleDebt)
+2025 Q4,2025-12-31,Macquarie Term Loan,,,N,2026,0.0,48.9%,2026-02-10 전액 상환. 상환 손실 24.8백만달러 인식,10-Q 2026 Q2 Note 5
+2026 Q1,2026-02-10,Turbine Warehouse 장비금융(MUFG),500.0,,N,2027-08-10,444.9,12.2%,"한도 500. 분기 최소상환 원금의 10%(1단계 400MW 리스 서명 시 5%로 경감, 기준일 폐쇄 후 9개월). 잔액은 만기 일시상환",10-Q 2026 Q2 Note 5
+2026 Q1,2026-03-26,Turbine Warehouse II 장비금융(CLMG/Beal),165.0,,N,2028-12-26,14.7,17.0%,"한도 165(이자·수수료용 22.9 유보). 폐쇄 후 33개월 만기. 만기 시 exit fee 37.0에서 누적이자 차감액 지급",10-Q 2026 Q2 Note 5
+2026 Q2,2026-06-30,High Voltage 장비금융(Keystone),,,N,2031,77.3,14.1%,"최소유동성 20.0 유지 약정. **2026-12-31까지 승인된 고객계약 미수령 시 의무 조기상환**. 담보가치 대비 원금 110% 한도",10-Q 2026 Q2 Note 5
+2026 Q1,2026-03-30,Promissory Note(YA II PN / Yorkville),156.3,,조건부,2027-09,0.0,0%,"약정액 30일마다 약 26.0씩 감액되어 6/30 기준 78.1. 6/30 현재 미인출. 인출 시 월 분할상환하며 매회 최소 10.0은 주식으로 결제(회당 800만주·총 4000만주 한도)",10-Q 2026 Q2 Note 5
+2026 Q3,2026-07-09,전환사채 5.00% 2031년 만기,431.3,416.8,조건부,2031,431.3,5.0%,전환가 $9.52 / capped call 상한 $14.64 / capped call 비용 34.5 / 정기상환·재무유지약정 없음,10-Q 2026 Q2 Note 9 (후속사건)
