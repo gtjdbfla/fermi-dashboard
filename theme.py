@@ -58,14 +58,27 @@ def ordinal_colors(count: int) -> list[str]:
     return [ramp[round(index * last / (count - 1))] for index in range(count)]
 
 
+# 격자·기준선은 **양쪽 테마에서 다 통하는 반투명 회색**으로 둔다.
+# 팔레트에서 골라 쓰면 테마 감지가 어긋났을 때 밝은 격자가 어두운 배경 위에 그대로 얹힌다.
+NEUTRAL_GRID = "rgba(128,128,128,0.22)"
+NEUTRAL_BASELINE = "rgba(128,128,128,0.45)"
+NEUTRAL_TICK = "rgba(140,140,140,1)"
+
+
 def style(figure, height: int = 320, legend: bool = False, ygrid: bool = True):
-    """모든 차트에 같은 크롬을 입힌다. 격자·축은 뒤로 물리고 데이터가 앞에 오게 한다."""
+    """모든 차트에 같은 크롬을 입힌다. 격자·축은 뒤로 물리고 데이터가 앞에 오게 한다.
+
+    **배경은 칠하지 않는다.** 예전에는 팔레트의 surface(#fcfcfb / #1a1a19)를 칠했는데,
+    두 가지가 어긋났다. (1) 테마 감지가 실패하면 어두운 화면에 흰 사각형이 박힌다.
+    (2) 감지가 맞아도 Streamlit 다크 배경(#0e1117)과 색이 달라 밝은 판이 떠 보인다.
+    투명하게 두면 Streamlit이 칠한 배경이 그대로 비쳐 어느 경우에도 어긋나지 않는다.
+    """
     colors = palette()
     figure.update_layout(
         height=height,
         template="plotly_dark" if colors is DARK else "plotly_white",
-        paper_bgcolor=colors["surface"],
-        plot_bgcolor=colors["surface"],
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family=FONT_FAMILY, size=12, color=colors["ink_soft"]),
         margin=dict(l=8, r=8, t=28, b=8),
         hoverlabel=dict(font_family=FONT_FAMILY, font_size=12),
@@ -73,9 +86,9 @@ def style(figure, height: int = 320, legend: bool = False, ygrid: bool = True):
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, title_text=""),
         bargap=0.35,
     )
-    figure.update_xaxes(showgrid=False, linecolor=colors["baseline"],
-                        tickfont=dict(color=colors["ink_muted"]), title_text="")
-    figure.update_yaxes(showgrid=ygrid, gridcolor=colors["grid"], zerolinecolor=colors["baseline"],
-                        linecolor="rgba(0,0,0,0)", tickfont=dict(color=colors["ink_muted"]),
+    figure.update_xaxes(showgrid=False, linecolor=NEUTRAL_BASELINE,
+                        tickfont=dict(color=NEUTRAL_TICK), title_text="")
+    figure.update_yaxes(showgrid=ygrid, gridcolor=NEUTRAL_GRID, zerolinecolor=NEUTRAL_BASELINE,
+                        linecolor="rgba(0,0,0,0)", tickfont=dict(color=NEUTRAL_TICK),
                         title_text="")
     return figure

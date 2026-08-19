@@ -291,6 +291,46 @@ def tenant_events(names: list[str] | None = None) -> list[dict]:
     return events
 
 
+# ── 약정 기한 ─────────────────────────────────────────────────────────────────
+# 차입 계약에 '테넌트를 언제까지 잡아야 하는지'가 조건으로 붙어 있다. 만기보다 이 날짜가
+# 먼저 오고, 못 지키면 상환 부담이 즉시 커진다. 계약 커버리지(판정 ①)와 직결된 기한이라
+# 지나가기 전에 알려야 한다. 매일 보내면 소음이므로 정해진 잔여일에만 한 번씩 보낸다.
+COVENANT_MARKS = (90, 60, 30, 14, 7, 3, 1, 0)
+
+
+def covenant_events() -> list[dict]:
+    """약정 기한이 지정한 잔여일에 닿았을 때만 사건으로 만든다."""
+    try:
+        import maturity as mt
+        rules = mt.covenants.__wrapped__() if hasattr(mt.covenants, "__wrapped__") else mt.covenants()
+    except Exception:
+        return []
+    if rules is None or rules.empty:
+        return []
+    events = []
+    for row in rules.to_dict("records"):
+        left = row.get("남은 일수")
+        if left is None or pd.isna(left):
+            continue
+        left = int(left)
+        # 지난 기한은 알리지 않는다. 지나간 사실은 화면에서 본다.
+        mark = next((m for m in COVENANT_MARKS if left <= m), None)
+        if mark is None or left < 0:
+            continue
+        deadline = pd.Timestamp(row["deadline"]).date()
+        events.append({
+            "id": f"covenant:{deadline}:{mark}",
+            "tier": "약정", "kind": row.get("facility", ""),
+            "when": str(pd.Timestamp.today().normalize().date()),   # 나이 필터를 통과시킨다
+            "form": "", "items": "", "excerpt": "",
+            "title": row.get("condition", ""),
+            "url": DASHBOARD_URL,
+            "left": left, "deadline": str(deadline),
+            "consequence": row.get("consequence", ""),
+        })
+    return events
+
+
 # ── 상태 변화(분기 실적) ──────────────────────────────────────────────────────
 def snapshot(m: dict, steps_done: int | None = None) -> dict:
     """판정을 바꾸는 값만 추린다. 이 값들이 움직였을 때가 곧 판정이 움직인 때다."""
@@ -391,6 +431,15 @@ def compose(event: dict, m: dict) -> str:
                  f"<i>{_escape(event['title'])}</i>"]
         if event.get("excerpt"):
             lines += ["", f"<blockquote>{_escape(event['excerpt'])}</blockquote>"]
+    elif event["tier"] == "약정":
+        left = event.get("left", 0)
+        mark = "🔴" if left <= 14 else ("🟡" if left <= 60 else "⏳")
+        lines = [f"{mark} <b>약정 기한 D-{left}</b> · {_escape(event['deadline'])}", "",
+                 f"<b>{_escape(event['kind'])}</b>",
+                 f"조건: {_escape(event['title'])}", "",
+                 f"미충족 시: {_escape(event['consequence'])}", "",
+                 "이 기한은 만기보다 먼저 온다. 테넌트를 못 잡으면 커버리지가 안 오르는 데서 "
+                 "끝나지 않고 <b>상환 부담이 즉시 커진다.</b>"]
     elif event["tier"] == "테넌트":
         lines = [f"🚨 <b>테넌트 악재 — {_escape(event['kind'])}</b>", "",
                  f"{_escape(event['when'])} · {_escape(event.get('source', ''))}",
@@ -425,6 +474,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
 
     # 첫 실행에는 어차피 보내지 않으므로 원문을 받지 않는다.
     events = (filing_events(filings, read_text=None if first_run else read_text, known=known)
+              + covenant_events()
               + news_events(articles)
               + tenant_events())
 

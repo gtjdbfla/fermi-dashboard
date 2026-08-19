@@ -68,6 +68,29 @@ def _roadmap(state: dict) -> list[str]:
     return out
 
 
+def _covenants() -> list[str]:
+    """만기보다 먼저 오는 약정 기한. 매일 남은 일수를 보여준다."""
+    try:
+        import maturity as mt
+        rules = mt.covenants.__wrapped__() if hasattr(mt.covenants, "__wrapped__") else mt.covenants()
+    except Exception:
+        return []
+    if rules is None or rules.empty:
+        return []
+    lines = []
+    for row in rules.to_dict("records"):
+        left = row.get("남은 일수")
+        if left is None or pd.isna(left):
+            continue
+        left = int(left)
+        if left < 0:
+            continue
+        mark = "🔴" if left <= 14 else ("🟡" if left <= 60 else "⏳")
+        lines.append(f"{mark} 약정 D-{left} ({pd.Timestamp(row['deadline']).date()}) — "
+                     f"{alerts._escape(str(row['condition'])[:44])}")
+    return lines
+
+
 def _price(frame: pd.DataFrame) -> list[str]:
     if frame is None or frame.empty or len(frame) < 2:
         return []
@@ -145,7 +168,7 @@ def compose(m, verdicts, state, filings, articles, actions, price_frame, mark) -
     today = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
     lines = [f"📅 <b>페르미 일일 리포트</b> · {today}", ""]
     lines += _verdicts(verdicts) + [""]
-    lines += _roadmap(state) + _price(price_frame)
+    lines += _roadmap(state) + _price(price_frame) + _covenants()
 
     new_blocks = (_new_filings(filings, mark) + _new_articles(articles, mark)
                   + _new_actions(actions, mark))

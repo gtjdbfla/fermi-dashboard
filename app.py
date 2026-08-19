@@ -79,7 +79,7 @@ def bar(frame, x, y, color=None, unit="M$", digits=0, height=300, horizontal=Fal
     palette = th.palette()
     figure = go.Figure()
     marker = dict(color=colors if colors is not None else (color or palette["series"][0]),
-                  line=dict(color=palette["surface"], width=2))
+                  line=dict(color="rgba(0,0,0,0)", width=0))
     text = [f"{value:,.{digits}f}" for value in frame[y]]
     if horizontal:
         figure.add_bar(y=frame[x], x=frame[y], orientation="h", marker=marker, text=text,
@@ -106,7 +106,7 @@ def grouped_bar(frame, x, series, unit="M$", height=320, stacked=False):
         labels = None if stacked else [f"{value:,.0f}" for value in frame[column]]
         figure.add_bar(x=frame[x], y=frame[column], name=name,
                        marker=dict(color=palette["series"][index],
-                                   line=dict(color=palette["surface"], width=2)),
+                                   line=dict(color="rgba(0,0,0,0)", width=0)),
                        text=labels, textposition="outside", cliponaxis=False,
                        hovertemplate="%{x} · " + name + "<br>%{y:,.0f} " + unit + "<extra></extra>")
     th.style(figure, height=height, legend=True)
