@@ -47,21 +47,34 @@ st.markdown(
 _help_ids = {}
 
 
+def esc(text):
+    """마크다운에 넘기기 전 달러 기호를 막는다.
+
+    Streamlit 마크다운은 `$...$`를 LaTeX 수식으로 읽는다. 한 문자열에 달러가 둘 이상 있으면
+    그 사이가 통째로 수식이 되어 **달러 기호가 사라지고 공백까지 먹는다.** 실제로 애널리스트
+    탭의 "$6 – $17"이 "6 – 17"로, AI 정리의 "약 $431M 규모의 노트(전환사채 등) 발행 및"이
+    "431M규모의노트(전환사채등)발행및"으로 뭉개졌다.
+
+    표(st.dataframe)는 마크다운을 거치지 않으므로 손대지 않는다.
+    """
+    return str(text).replace("$", r"\$") if text is not None else text
+
+
 def heading(title: str, help_text: str = "", size: str = "#####"):
     """제목 옆 물음표. 눌렀을 때만 설명이 열린다.
 
     st.markdown(help=...) 툴팁은 마우스를 올려야 열려 모바일에서 쓰기 어렵다.
     """
     if not help_text:
-        st.markdown(f"{size} {title}")
+        st.markdown(f"{size} {esc(title)}")
         return
     key = f"help_{len(_help_ids)}"
     _help_ids[key] = title
     with st.container(key=key):
         left, right = st.columns([0.92, 0.08], vertical_alignment="center")
-        left.markdown(f"{size} {title}")
+        left.markdown(f"{size} {esc(title)}")
         with right.popover("", icon=":material/help:"):
-            st.markdown(help_text)
+            st.markdown(esc(help_text))
 
 
 def note(help_text: str, label: str = "설명"):
@@ -70,7 +83,7 @@ def note(help_text: str, label: str = "설명"):
     _help_ids[key] = label
     with st.container(key=key):
         with st.popover(label, icon=":material/help:"):
-            st.markdown(help_text)
+            st.markdown(esc(help_text))
 
 
 # ── 렌더 헬퍼 ─────────────────────────────────────────────────────────────────
@@ -147,7 +160,7 @@ def table(frame, **kwargs):
 
 def metric_row(items):
     for column, (label, value, help_text) in zip(st.columns(len(items)), items):
-        column.metric(label, value, help=help_text or None)
+        column.metric(esc(label), esc(value), help=esc(help_text) if help_text else None)
 
 
 # ── 데이터 ────────────────────────────────────────────────────────────────────
@@ -198,7 +211,7 @@ if stale["count"] > 0:
     if review.get("text"):
         with st.container(border=True):
             st.markdown("**🤖 공시 판독**")
-            st.markdown(review["text"])
+            st.markdown(esc(review["text"]))
         st.caption("서버 크론이 30분마다 새 공시를 읽어 판정한다. **CSV는 자동으로 바뀌지 않는다** — "
                    "확정 반영은 저장소에 커밋해야 한다.")
     elif review.get("error"):
@@ -225,12 +238,12 @@ heading(
 )
 for column, item in zip(st.columns(3), sc.fermi_position(m)):
     with column.container(border=True):
-        st.markdown(f"**{item['label']}**")
-        st.markdown(f"### {item['value']}")
-        st.markdown(f"{th.STATUS_ICON[item['status']]} **{item['verdict']}**")
+        st.markdown(f"**{esc(item['label'])}**")
+        st.markdown(f"### {esc(item['value'])}")
+        st.markdown(f"{th.STATUS_ICON[item['status']]} **{esc(item['verdict'])}**")
         if item["detail"]:
             with st.popover("근거", icon=":material/help:"):
-                st.markdown(item["detail"])
+                st.markdown(esc(item["detail"]))
 
 # 원문자는 핵심 판정 ①②③과 **같은 뜻으로만** 쓴다. 예전에는 탭 ②가 현금흐름(판정 ③)이라
 # 같은 기호가 두 곳에서 다른 걸 가리켰고, 판정 ②는 볼 화면이 아예 없었다.
@@ -331,7 +344,7 @@ with tabs[1]:
             days = int(row["남은 일수"])
             icon = "🔴" if days < 30 else ("🟡" if days < 90 else "⚪")
             st.markdown(f"{icon} **{row['deadline'].date()} · D-{days}** — {row['facility']}")
-            st.caption(f"조건: {row['condition']}  ·  미충족 시: {row['consequence']}")
+            st.caption(esc(f"조건: {row['condition']}  ·  미충족 시: {row['consequence']}"))
 
     st.divider()
     schedule = mt.schedule()
@@ -694,7 +707,7 @@ with tabs[6]:
         review, review_error, review_key = ai_review.run(articles, chatter, m)
         if review:
             with st.container(border=True):
-                st.markdown(review)
+                st.markdown(esc(review))
             caption = (f"{ai_review.MODEL} · 기사 {min(len(articles), ai_review.MAX_ARTICLES)}건 + "
                        f"커뮤니티 {min(len(chatter), ai_review.MAX_POSTS)}건 · 지문 `{review_key}`")
             # 갱신 대기 중이면 지금 보이는 게 직전 정리라는 사실을 밝힌다.
@@ -793,12 +806,12 @@ with tabs[7]:
             "의견 수가 함께 줄면 커버리지를 접은 증권사가 있다는 뜻이다."))
         st.plotly_chart(compare_line(trail, "시점", [("목표주가", "컨센서스 목표주가")],
                                      unit="$", height=300), use_container_width=True)
-        st.caption(
+        st.caption(esc(
             f"고점 ${peak['목표주가']:,.2f}({peak['시점'].strftime('%Y-%m')}) → "
             f"저점 ${low['목표주가']:,.2f}({low['시점'].strftime('%Y-%m')}, "
             f"{low['목표주가']/peak['목표주가']-1:+.0%}) → "
             f"현재 ${latest['목표주가']:,.2f}({latest['목표주가']/peak['목표주가']-1:+.0%})"
-        )
+        ))
         view = trail.copy()
         view["시점"] = view["시점"].dt.strftime("%Y-%m")
         view["목표주가"] = view["목표주가"].map(lambda v: f"${v:,.2f}")
@@ -850,7 +863,7 @@ with tabs[7]:
     cached_review = an.cached_review()
     if cached_review.get("text"):
         with st.container(border=True):
-            st.markdown(cached_review["text"])
+            st.markdown(esc(cached_review["text"]))
         st.caption(f"지문 `{cached_review.get('fingerprint', '')}` · "
                    f"생성 {str(cached_review.get('generated_at', ''))[:16]}")
     else:
@@ -865,7 +878,7 @@ with tabs[8]:
     st.caption(fresh.tab_line("reference", m, price_frame))
     for card in fd.reference_cards(m):
         with st.expander(f"{th.STATUS_ICON[card['status']]}  {card['axis']} — {card['headline']}"):
-            st.caption(f"**왜 내렸나** — {card.get('demoted', '')}")
+            st.caption(esc(f"**왜 내렸나** — {card.get('demoted', '')}"))
 
             if card["axis"].startswith("자금여력"):
                 metric_row([
