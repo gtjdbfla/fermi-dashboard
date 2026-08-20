@@ -96,7 +96,8 @@ def _prompt(payload: str, facts: dict) -> str:
 - 공시에 적힌 것만 써라. 없는 사실을 지어내지 마라.
 - "LOI", "framework agreement", "non-binding", "MOU"는 구속력 있는 계약이 아니다. 애매하면
   계약으로 치지 말고 확인 필요에 적어라.
-- 투자 판단이나 매수·매도 권유는 하지 마라. 목표주가도 제시하지 마라."""
+- 투자 판단이나 매수·매도 권유는 하지 마라. 목표주가도 제시하지 마라.
+- **LaTeX 문법을 쓰지 마라.** 화살표는 → 를 그대로 쓰고, 금액은 $6.5B처럼 평문으로 써라."""
 
 
 def run(m: dict, reviewed_through, force: bool = False) -> dict:

@@ -60,6 +60,25 @@ def esc(text):
     return str(text).replace("$", r"\$") if text is not None else text
 
 
+# AI가 이따금 LaTeX을 쓴다($\rightarrow$ 같은 것). 달러를 이스케이프하면 그게 날것으로
+# 보이므로, 흔한 것만 먼저 평문으로 바꾼 뒤 이스케이프한다.
+_LATEX = [
+    (r"$\rightarrow$", "→"), (r"$\to$", "→"), (r"$\Rightarrow$", "⇒"),
+    (r"$\leftarrow$", "←"), (r"$\approx$", "≈"), (r"$\times$", "×"),
+    (r"$\sim$", "~"), (r"$\pm$", "±"), (r"$\le$", "≤"), (r"$\ge$", "≥"),
+]
+
+
+def clean_ai(text) -> str:
+    """AI가 만든 마크다운을 화면에 올리기 전 손질한다."""
+    if not text:
+        return ""
+    out = str(text)
+    for latex, plain in _LATEX:
+        out = out.replace(latex, plain)
+    return esc(out)
+
+
 def heading(title: str, help_text: str = "", size: str = "#####"):
     """제목 옆 물음표. 눌렀을 때만 설명이 열린다.
 
@@ -211,7 +230,7 @@ if stale["count"] > 0:
     if review.get("text"):
         with st.container(border=True):
             st.markdown("**🤖 공시 판독**")
-            st.markdown(esc(review["text"]))
+            st.markdown(clean_ai(review["text"]))
         st.caption("서버 크론이 30분마다 새 공시를 읽어 판정한다. **CSV는 자동으로 바뀌지 않는다** — "
                    "확정 반영은 저장소에 커밋해야 한다.")
     elif review.get("error"):
@@ -707,7 +726,7 @@ with tabs[6]:
         review, review_error, review_key = ai_review.run(articles, chatter, m)
         if review:
             with st.container(border=True):
-                st.markdown(esc(review))
+                st.markdown(clean_ai(review))
             caption = (f"{ai_review.MODEL} · 기사 {min(len(articles), ai_review.MAX_ARTICLES)}건 + "
                        f"커뮤니티 {min(len(chatter), ai_review.MAX_POSTS)}건 · 지문 `{review_key}`")
             # 갱신 대기 중이면 지금 보이는 게 직전 정리라는 사실을 밝힌다.
@@ -863,7 +882,7 @@ with tabs[7]:
     cached_review = an.cached_review()
     if cached_review.get("text"):
         with st.container(border=True):
-            st.markdown(esc(cached_review["text"]))
+            st.markdown(clean_ai(cached_review["text"]))
         st.caption(f"지문 `{cached_review.get('fingerprint', '')}` · "
                    f"생성 {str(cached_review.get('generated_at', ''))[:16]}")
     else:
