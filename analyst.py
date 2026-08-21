@@ -383,7 +383,7 @@ def merged_actions(extra: pd.DataFrame | None = None) -> pd.DataFrame:
 # Citizens $30 같은 건이 통째로 빠져 있었고 Evercore·UBS 하향도 목표가가 비어 있었다.
 # Finviz는 날짜·행동·증권사·등급전환·목표가를 표로 유지한다. 이쪽을 1차로 쓴다.
 FINVIZ_CACHE = "analyst_ratings"
-FINVIZ_MAX_AGE = 46800        # 느린층(하루 2회)
+FINVIZ_MAX_AGE = 5400         # 빠른층(30분). 등급 변경은 장중에 나오고 그날 주가를 움직인다
 # 같은 액션을 등급표와 기사가 며칠 차이로 담는다. Citizens 신규 커버리지가 등급표 2/9,
 # 기사 2/16으로 잡혀 같은 사건이 두 줄로 나왔다. 매체가 늦게 쓰는 경우를 감안해 열흘로 본다.
 MERGE_DAYS = 10

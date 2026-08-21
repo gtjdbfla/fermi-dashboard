@@ -291,6 +291,48 @@ def tenant_events(names: list[str] | None = None) -> list[dict]:
     return events
 
 
+# ── 애널리스트 액션 ───────────────────────────────────────────────────────────
+# 처음엔 "애널리스트 목표주가는 소음"이라 보고 알림에서 뺐다. 그 판단은 컨센서스가
+# $32에서 $5로 무너진 걸 보기 전이었고, 인하 사유가 전부 tenant/contract delay라는 것도
+# 나중에 알았다. 지금 보면 소음이 아니라 판정 ①과 같은 축을 가리키는 선행 신호다.
+#
+# 다만 **'유지'는 뺀다.** 8월 액션 4건 중 3건이 유지였다. 등급을 안 바꾼 재확인까지
+# 알리면 월 4회가 되어 소음이 된다. 방향이 바뀌는 순간만 보낸다.
+ANALYST_ACTIONS = {"신규 커버리지", "커버리지 재개", "상향", "하향",
+                   "목표가 상향", "목표가 인하"}
+ANALYST_MAX_AGE_DAYS = 7
+
+
+def analyst_events(articles: pd.DataFrame) -> list[dict]:
+    """등급표+기사에서 방향이 바뀐 액션만 사건으로 만든다."""
+    try:
+        import analyst as an
+        table = an.combined(an.merged_actions(articles))
+    except Exception:
+        return []
+    if table is None or table.empty:
+        return []
+    events = []
+    for row in table.to_dict("records"):
+        if row.get("행동") not in ANALYST_ACTIONS:
+            continue
+        when = pd.to_datetime(row.get("시점"), errors="coerce")
+        if pd.isna(when):
+            continue
+        events.append({
+            "id": f"analyst:{row['증권사']}:{when.date()}:{row['행동']}",
+            "tier": "애널리스트", "kind": row["증권사"],
+            "when": str(when.date()),
+            "form": "", "items": "", "excerpt": "",
+            "title": row["행동"],
+            "url": row.get("링크") or DASHBOARD_URL,
+            "등급": row.get("등급", "–"), "목표가": row.get("목표가", "–"),
+            "이전": row.get("이전", "–"), "이유": row.get("언급된 이유", "–"),
+            "출처": row.get("출처", ""),
+        })
+    return events
+
+
 # ── 약정 기한 ─────────────────────────────────────────────────────────────────
 # 차입 계약에 '테넌트를 언제까지 잡아야 하는지'가 조건으로 붙어 있다. 만기보다 이 날짜가
 # 먼저 오고, 못 지키면 상환 부담이 즉시 커진다. 계약 커버리지(판정 ①)와 직결된 기한이라
@@ -431,6 +473,22 @@ def compose(event: dict, m: dict) -> str:
                  f"<i>{_escape(event['title'])}</i>"]
         if event.get("excerpt"):
             lines += ["", f"<blockquote>{_escape(event['excerpt'])}</blockquote>"]
+    elif event["tier"] == "애널리스트":
+        icon = {"상향": "🟢", "목표가 상향": "🟢", "하향": "🔴", "목표가 인하": "🔴"}.get(
+            event["title"], "🔵")
+        lines = [f"{icon} <b>애널리스트 — {_escape(event['kind'])} {_escape(event['title'])}</b>", "",
+                 f"{_escape(event['when'])} · {_escape(event.get('출처', ''))}"]
+        if event.get("등급", "–") != "–":
+            lines.append(f"등급: {_escape(event['등급'])}")
+        if event.get("목표가", "–") != "–":
+            target = f"목표가: {_escape(event['목표가'])}"
+            if event.get("이전", "–") != "–":
+                target += f" (이전 {_escape(event['이전'])})"
+            lines.append(target)
+        if event.get("이유", "–") != "–":
+            lines.append(f"사유: {_escape(event['이유'])}")
+        lines += ["", "목표주가는 예측이지 사실이 아니다. 다만 <b>인하 사유가 계약 지연이면</b> "
+                      "핵심 판정 ①과 같은 축을 가리킨다."]
     elif event["tier"] == "약정":
         left = event.get("left", 0)
         mark = "🔴" if left <= 14 else ("🟡" if left <= 60 else "⏳")
@@ -475,6 +533,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
     # 첫 실행에는 어차피 보내지 않으므로 원문을 받지 않는다.
     events = (filing_events(filings, read_text=None if first_run else read_text, known=known)
               + covenant_events()
+              + analyst_events(articles)
               + news_events(articles)
               + tenant_events())
 
@@ -493,7 +552,8 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
     for event in events:
         if event["id"] in known:
             continue
-        limit = NEWS_MAX_AGE_DAYS if event["tier"] in ("미확인", "테넌트") else MAX_EVENT_AGE_DAYS
+        limit = {"미확인": NEWS_MAX_AGE_DAYS, "테넌트": NEWS_MAX_AGE_DAYS,
+                 "애널리스트": ANALYST_MAX_AGE_DAYS}.get(event["tier"], MAX_EVENT_AGE_DAYS)
         when = pd.to_datetime(event.get("when"), errors="coerce")
         if pd.notna(when) and (today - when).days > limit:
             aged_ids.append(event["id"])

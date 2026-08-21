@@ -28,7 +28,7 @@ STALE_AFTER = {
     "애널리스트 액션": 5400,
     "애널리스트 정리(AI)": 5400,
     "애널리스트 컨센서스": 90000,
-    "증권사 등급표": 90000,
+    "증권사 등급표": 5400,
 }
 
 # 탭마다 어떤 데이터를 쓰는지. 화면 상단에 그 탭 것만 짧게 보여준다.
@@ -119,6 +119,8 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
         "새 기사 있을 때 · 최소 2시간 간격")
     add("30분", "애널리스트 액션", None, dc.age_seconds("analyst_headlines", "frame.json"),
         "크론 30분 · 뉴스 제목에서 추출")
+    add("30분", "증권사 등급표", None, dc.age_seconds("analyst_ratings", "frame.json"),
+        "크론 30분 · Finviz+Yahoo+TipRanks")
     add("30분", "애널리스트 정리(AI)", None, dc.age_seconds("analyst_review", "json"),
         "자료 바뀔 때 · 최소 2시간 간격")
 
@@ -145,8 +147,7 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
     add("하루 2회", "섹터 시가총액", None, dc.age_seconds("market_caps", "json"), "09·21시")
     add("하루 2회", "애널리스트 컨센서스", None, dc.age_seconds("analyst_consensus", "json"),
         "09·21시 · 원본 월별 갱신")
-    add("하루 2회", "증권사 등급표", None, dc.age_seconds("analyst_ratings", "frame.json"),
-        "09·21시 · Finviz")
+
     add("하루 1회", "섹터 표본 13개사", None, _sector_age(), "07시 · 원본 연간 공시·일봉")
 
     # ── 사람이 확정하는 계층 ──────────────────────────────────────────────────
