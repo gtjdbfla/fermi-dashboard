@@ -349,6 +349,48 @@ def analyst_events(articles: pd.DataFrame) -> list[dict]:
     return events
 
 
+# ── 내부자 거래 ───────────────────────────────────────────────────────────────
+# 경영진이 자기 돈을 어디에 거는지는 그들이 말하는 것보다 정확하다. 특히 이 회사는
+# 상장 10개월 만에 CEO가 두 번 바뀌었고, 그 사이 내부자들이 무엇을 했는지가 판단의
+# 한 축이다.
+#
+# **부여(A)는 알리지 않는다.** 회사가 준 주식은 본인의 판단이 아니다. 그런데 Form 4를
+# 건수로만 보면 부여와 매수가 똑같이 '내부자 거래 1건'으로 보인다. 실제로 2026-08-14
+# 신임 CEO의 468,750주 부여가 "CEO가 매수했다"로 퍼졌다. 코드 P와 A를 갈라서 P만
+# 매수라고 부르는 것이 이 감지기의 존재 이유다.
+#
+# 매수(P)와 매도(S)는 무게가 다르다. 매도는 집을 사거나 세금을 내려고 할 수도 있지만,
+# 매수는 그럴 이유가 없다. 그래서 매수는 규모와 무관하게 전부 보내고, 메시지 등급도
+# 다르게 준다.
+INSIDER_MAX_AGE_DAYS = 14
+
+
+def insider_events(frame=None) -> list[dict]:
+    """Form 4의 공개시장 매수·매도. 제출본 하나 = 사건 하나."""
+    try:
+        import insider as ins
+        if frame is None:
+            frame = ins.transactions()
+        totals = ins.tally(frame)
+        actions = ins.by_filing(frame)
+    except Exception:
+        return []
+    events = []
+    for item in actions:
+        events.append({
+            "id": f"insider:{item['accn']}:{item['code']}",
+            "tier": "내부자",
+            "kind": item["action"],
+            "when": item["filed"],
+            "form": "4", "items": "", "excerpt": "",
+            "title": f"{item['person']} {item['action']}",
+            "url": item["url"] or DASHBOARD_URL,
+            "insider": item,
+            "tally": totals,
+        })
+    return events
+
+
 # ── 약정 기한 ─────────────────────────────────────────────────────────────────
 # 차입 계약에 '테넌트를 언제까지 잡아야 하는지'가 조건으로 붙어 있다. 만기보다 이 날짜가
 # 먼저 오고, 못 지키면 상환 부담이 즉시 커진다. 계약 커버리지(판정 ①)와 직결된 기한이라
@@ -626,6 +668,47 @@ def compose(event: dict, m: dict) -> str:
             lines += ["", f"미충족 시: {_escape(event['consequence'])}", "",
                       "이 기한은 만기보다 먼저 온다. 테넌트를 못 잡으면 커버리지가 안 오르는 데서 "
                       "끝나지 않고 <b>상환 부담이 즉시 커진다.</b>"]
+    elif event["tier"] == "내부자":
+        item = event["insider"]
+        totals = event.get("tally") or {}
+        buying = item["code"] == "P"
+        who = _escape(item["person"])
+        role = " · ".join(x for x in (item["roles"], item["officer_title"]) if x)
+        span = (_escape(item["date"]) if item["date"] == item["date_end"]
+                else f"{_escape(item['date'])}~{_escape(item['date_end'])}")
+        price = ""
+        if item["price_low"]:
+            price = (f" @ ${item['price_low']:,.2f}" if item["price_low"] == item["price_high"]
+                     else f" @ ${item['price_low']:,.2f}~${item['price_high']:,.2f}")
+        lines = [f"{'🟢' if buying else '🔴'} <b>내부자 {_escape(item['action'])} — {who}</b>", "",
+                 f"{span} 거래 · {_escape(item['filed'])} 신고"]
+        if role:
+            lines.append(_escape(role))
+        lines.append(f"<b>{item['shares']:,.0f}주</b>{price}"
+                     + (f" ≈ ${item['value'] / 1e6:,.1f}M" if item["value"] else ""))
+        if item["share_pct"] is not None:
+            lines.append((f"기존 보유의 <b>{item['share_pct']:.1f}%</b>만큼 늘렸다"
+                          if buying else f"보유 지분의 <b>{item['share_pct']:.1f}%</b>를 팔았다")
+                         + (f" · 현재 {item['owned_after']:,.0f}주"
+                            if item["owned_after"] is not None else ""))
+        if item["planned"]:
+            lines.append("<i>10b5-1 사전계획 거래 — 매매 시점을 미리 정해둔 건이라 "
+                         "지금 시점의 판단으로 읽으면 안 된다.</i>")
+        # 개별 건보다 누적 대비가 말이 된다. 매도 한 건은 집을 사는 것일 수도 있지만,
+        # 상장 이래 매수가 0인 것은 다른 얘기다.
+        if totals:
+            lines += ["", f"<b>누적</b> — 매수 {totals['buy_shares']:,.0f}주"
+                          + (f" (${totals['buy_value'] / 1e6:,.1f}M, {totals['buyers']}명)"
+                             if totals["buy_shares"] else " (없음)")
+                          + f" / 매도 {totals['sell_shares']:,.0f}주"
+                          + (f" (${totals['sell_value'] / 1e6:,.1f}M, {totals['sellers']}명)"
+                             if totals["sell_shares"] else " (없음)")]
+        if buying:
+            lines += ["", "<b>본인 돈으로 시장에서 산 것이다.</b> 회사가 준 무상 부여(코드 A)와 "
+                          "다르다. 이 회사에서 지금까지 없던 종류의 신호다."]
+        else:
+            lines += ["", "매도 자체는 개인 사정일 수 있다. 보는 것은 <b>시점과 누적</b>이다 — "
+                          "약정 기한이나 실적 발표 직전인지, 그리고 반대편에 매수가 있는지."]
     elif event["tier"] == "테넌트":
         lines = [f"🚨 <b>테넌트 악재 — {_escape(event['kind'])}</b>", "",
                  f"{_escape(event['when'])} · {_escape(event.get('source', ''))}",
@@ -665,6 +748,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
     events = (filing_events(filings, read_text=None if first_run else read_text, known=known)
               + covenant_events(m)
               + analyst_events(articles)
+              + insider_events()
               + news_events(articles)
               + tenant_events())
 
@@ -684,7 +768,8 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
         if event["id"] in known:
             continue
         limit = {"미확인": NEWS_MAX_AGE_DAYS, "테넌트": NEWS_MAX_AGE_DAYS,
-                 "애널리스트": ANALYST_MAX_AGE_DAYS}.get(event["tier"], MAX_EVENT_AGE_DAYS)
+                 "애널리스트": ANALYST_MAX_AGE_DAYS,
+                 "내부자": INSIDER_MAX_AGE_DAYS}.get(event["tier"], MAX_EVENT_AGE_DAYS)
         when = pd.to_datetime(event.get("when"), errors="coerce")
         if pd.notna(when) and (today - when).days > limit:
             aged_ids.append(event["id"])
