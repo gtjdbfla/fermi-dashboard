@@ -54,6 +54,16 @@ BROKERS = [
     "Melius", "Maxim", "Zacks", "Argus", "CFRA", "HSBC", "BTIG", "UBS", "RBC", "BofA", "Citi",
     "JMP", "DA Davidson", "Clear Street", "Lake Street", "Compass Point", "New Street",
 ]
+# 제목에 회사가 없으면 그 기사는 페르미 얘기가 아니다.
+#
+# **실제로 오보를 보냈다.** "Health Catalyst Shares Fall After Canaccord Genuity Downgrade"와
+# "Weibo Shares Fall After Citigroup Downgrade"가 각각 Canaccord 하향, Citi 하향으로 잡혀
+# 텔레그램까지 나갔다. 증권사 이름과 행동 동사만 확인하고 **어느 회사 얘기인지는 묻지
+# 않았기** 때문이다. Nasdaq 피드에는 시장 전반 기사가 섞여 들어오고, 기사 캐시를 누적으로
+# 바꾼 뒤 그런 제목이 쌓이면서 터졌다.
+_IS_FERMI = re.compile(r"\bfermi\b|\bfrmi\b|페르미", re.I)
+
+
 # 행동 → (표시명, 방향). 방향은 화면 색과 정렬에만 쓴다.
 ACTIONS = [
     (r"initiat(e|es|ed)\s+(coverage|with)|begins?\s+coverage|starts?\s+coverage|"
@@ -257,6 +267,14 @@ def _reason(title: str) -> str:
     return "–"
 
 
+def _broker_hit(name: str, lowered: str) -> bool:
+    """증권사 이름이 낱말 경계에서 맞는지. 부분일치를 막는다.
+
+    "Citi"가 "Citigroup"의 앞부분에 걸려 Weibo 기사가 Citi 하향으로 잡힌 적이 있다.
+    """
+    return re.search(r"(?<![a-z])" + re.escape(name.lower()) + r"(?![a-z])", lowered) is not None
+
+
 def actions(frame: pd.DataFrame) -> pd.DataFrame:
     """제목에서 증권사·행동·목표가·이유를 뽑는다.
 
@@ -272,8 +290,10 @@ def actions(frame: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for row in frame.itertuples():
         title = str(getattr(row, "title", "") or "")
+        if not _IS_FERMI.search(title):
+            continue                       # 남의 회사 기사. 증권사·행동이 맞아도 버린다.
         lowered = title.lower()
-        broker = next((name for name in BROKERS if name.lower() in lowered), None)
+        broker = next((name for name in BROKERS if _broker_hit(name, lowered)), None)
         if not broker:
             continue
         action, direction = next(((label, way) for pattern, label, way in ACTIONS
@@ -343,6 +363,8 @@ def absorb(extra: pd.DataFrame | None) -> int:
     keep = extra[extra["title"].astype(str).str.contains(
         r"price\s+target|analyst|upgrad|downgrad|initiat|coverage|rating|outperform",
         case=False, na=False)]
+    # 누적 캐시에 남의 회사 기사가 쌓이면 나중에 오탐의 씨앗이 된다. 들어올 때 막는다.
+    keep = keep[keep["title"].astype(str).apply(lambda t: bool(_IS_FERMI.search(t)))]
     if keep.empty:
         return 0
     previous = dc.load_frame(HEADLINE_CACHE, 86400 * 365)
