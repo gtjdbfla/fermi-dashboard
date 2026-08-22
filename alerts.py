@@ -479,14 +479,13 @@ BASKET_GAP = 3.0        # 이 %p 넘게 벌어지면 개별 요인으로 본다
 
 def price_context() -> str:
     """주가 한 줄 + 왜 움직였는지. 실패하면 빈 문자열(알림은 그대로 나간다)."""
+    raw = lambda f: getattr(f, "__wrapped__", f)          # noqa: E731
     try:
         import market
-        import market_flow as mf
-        raw = lambda f: getattr(f, "__wrapped__", f)          # noqa: E731
         frame, _ = raw(market.load_price)("FRMI")
-        if frame is None or len(frame) < 2:
-            return ""
         data = frame.dropna(subset=["close"])
+        if len(data) < 2:
+            return ""
         last, prev = data.iloc[-1], data.iloc[-2]
         move = (last["close"] / prev["close"] - 1) * 100
     except Exception:
@@ -494,42 +493,43 @@ def price_context() -> str:
 
     line = f"주가 <b>${last['close']:,.2f}</b> · 전일 {move:+.1f}%"
 
-    # 바스켓과 비교
+    # 바스켓과 비교. basket_frame은 date + 티커별 컬럼인 **wide 포맷**이다.
+    # long 포맷으로 읽다가 조용히 건너뛰었다.
     try:
+        import market_flow as mf
         basket = raw(mf.basket_frame)()
-        if basket is not None and not basket.empty:
-            peers = basket.dropna(subset=["close"]) if "close" in basket.columns else None
-            if peers is not None and {"ticker", "date", "close"} <= set(basket.columns):
-                moves = []
-                for _, g in basket.dropna(subset=["close"]).groupby("ticker"):
-                    g = g.sort_values("date")
-                    if len(g) >= 2:
-                        moves.append((g.iloc[-1]["close"] / g.iloc[-2]["close"] - 1) * 100)
-                if moves:
-                    peer = sum(moves) / len(moves)
-                    gap = move - peer
-                    if abs(gap) >= BASKET_GAP:
-                        line += (f"\n· AI 인프라 바스켓 {peer:+.1f}% → <b>개별 요인</b>"
-                                 f" ({gap:+.1f}%p 차이)")
-                    else:
-                        line += f"\n· AI 인프라 바스켓 {peer:+.1f}% → 섹터 동행"
+        peers = [c for c in basket.columns if c not in ("date", "FRMI")]
+        recent = basket.dropna(subset=peers, how="all").tail(2)
+        if len(recent) == 2 and peers:
+            moves = []
+            for ticker in peers:
+                before, after = recent.iloc[0][ticker], recent.iloc[1][ticker]
+                if pd.notna(before) and pd.notna(after) and before:
+                    moves.append((after / before - 1) * 100)
+            if moves:
+                peer = sum(moves) / len(moves)
+                gap = move - peer
+                verdict = (f"<b>개별 요인</b> ({gap:+.1f}%p 차이)"
+                           if abs(gap) >= BASKET_GAP else "섹터 동행")
+                line += f"\n· AI 인프라 바스켓 {peer:+.1f}% → {verdict}"
     except Exception:
         pass
 
-    # 같은 날 페르미 기사 중 가장 많이 쓰인 분류를 사유 후보로 제시한다.
+    # 같은 날 페르미 기사. 무엇 때문에 움직였는지 짚을 실마리다.
     try:
         import news as nw
         articles = raw(nw.cached_articles)()
         articles["published"] = pd.to_datetime(articles["published"], errors="coerce", utc=True)
-        same_day = articles[articles["published"] >= pd.Timestamp(last["date"]).tz_localize("UTC")]
+        day = pd.Timestamp(last["date"]).tz_localize("UTC")
+        same_day = articles[articles["published"] >= day]
         same_day = same_day[same_day["title"].astype(str).apply(
             lambda t: bool(FERMI_MARKS.search(t)))]
         if not same_day.empty:
-            top = same_day[same_day["group"] != "기타"]["group"].value_counts()
-            if not top.empty:
-                headline = same_day.iloc[0]["title"]
-                line += (f"\n· 당일 기사 {len(same_day)}건 (최다 {top.index[0]})"
-                         f"\n  <i>{_escape(str(headline)[:64])}</i>")
+            named = same_day[same_day.get("group", "기타") != "기타"]["group"].value_counts()
+            tag = f" · 최다 {named.index[0]}" if not named.empty else ""
+            headline = same_day.sort_values("published", ascending=False).iloc[0]["title"]
+            line += (f"\n· 당일 기사 {len(same_day)}건{tag}"
+                     f"\n  <i>{_escape(str(headline)[:64])}</i>")
     except Exception:
         pass
     return line
