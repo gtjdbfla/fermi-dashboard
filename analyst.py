@@ -719,6 +719,52 @@ def combined(action_frame: pd.DataFrame) -> pd.DataFrame:
     return out[columns]
 
 
+def _amount(text) -> float | None:
+    """'$15.00 (04-01 기준)' → 15.0. 표시용 문자열에서 숫자만 되찾는다."""
+    if not text or text == "–":
+        return None
+    found = re.search(r"\$(\d[\d,]*\.?\d*)", str(text))
+    return float(found.group(1).replace(",", "")) if found else None
+
+
+def by_broker(frame: pd.DataFrame) -> pd.DataFrame:
+    """증권사별 **현재 입장 한 줄**. 같은 곳이 낸 리포트를 시간순으로 늘어놓으면
+    36행이 되어 누가 어디에 서 있는지가 안 보인다.
+
+    최신 리포트를 현재 입장으로 삼고, 최초 목표가와 견줘 그 증권사가 이 회사를
+    어떻게 바꿔 봤는지를 한 칸에 담는다.
+    """
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    ordered = frame.copy()
+    ordered["_시점"] = pd.to_datetime(ordered["시점"], errors="coerce")
+    ordered = ordered.dropna(subset=["_시점"]).sort_values("_시점")
+
+    rows = []
+    for broker, group in ordered.groupby("증권사"):
+        latest, first = group.iloc[-1], group.iloc[0]
+        now, then = _amount(latest["목표가"]), _amount(first["목표가"])
+        change = "–"
+        if now is not None and then is not None and then:
+            change = f"{(now/then - 1) * 100:+.0f}%" if now != then else "변화 없음"
+        reasons = [r for r in group["언급된 이유"] if r and r != "–"]
+        rows.append({
+            "": latest[""],
+            "증권사": broker,
+            "현재 등급": latest["등급"] if latest["등급"] != "–" else "–",
+            "현재 목표가": latest["목표가"],
+            "최초 목표가": first["목표가"] if then is not None else "–",
+            "변화": change,
+            "최근 액션": latest["행동"],
+            "최근 시점": latest["_시점"].date(),
+            "리포트": len(group),
+            "최근 사유": reasons[-1] if reasons else "–",
+            "링크": latest.get("링크", ""),
+        })
+    out = pd.DataFrame(rows)
+    return out.sort_values("최근 시점", ascending=False).reset_index(drop=True)
+
+
 # ── AI 분석 ───────────────────────────────────────────────────────────────────
 def _prompt(payload: str, facts: dict) -> str:
     return f"""너는 페르미(Fermi Inc., NASDAQ: FRMI)에 대한 증권사 애널리스트 의견을 정리하는

@@ -867,9 +867,17 @@ with tabs[7]:
         ])
         if reasons:
             st.caption("최근 언급된 사유 — " + " · ".join(dict.fromkeys(reasons)))
-        table(actions, column_config={
+        # 같은 증권사가 낸 리포트를 시간순으로 늘어놓으면 36행이 되어 누가 어디에 서
+        # 있는지가 안 보인다. 증권사별 현재 입장 한 줄로 접고, 이력은 아래에 남긴다.
+        table(an.by_broker(actions), column_config={
             "링크": st.column_config.LinkColumn("링크", display_text="열기"),
-            "": st.column_config.TextColumn("", width="small")}, height=380)
+            "": st.column_config.TextColumn("", width="small")})
+        with st.expander(f"시간순 전체 이력 ({len(actions)}건)"):
+            st.caption("같은 증권사의 리포트가 여러 번 나온 순서를 그대로 본다. "
+                       "목표가가 언제 어떻게 움직였는지는 여기서 읽는다.")
+            table(actions, column_config={
+                "링크": st.column_config.LinkColumn("링크", display_text="열기"),
+                "": st.column_config.TextColumn("", width="small")}, height=380)
 
     eps = consensus.get("eps") or []
     if eps:
