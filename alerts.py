@@ -353,39 +353,67 @@ def analyst_events(articles: pd.DataFrame) -> list[dict]:
 # 차입 계약에 '테넌트를 언제까지 잡아야 하는지'가 조건으로 붙어 있다. 만기보다 이 날짜가
 # 먼저 오고, 못 지키면 상환 부담이 즉시 커진다. 계약 커버리지(판정 ①)와 직결된 기한이라
 # 지나가기 전에 알려야 한다. 매일 보내면 소음이므로 정해진 잔여일에만 한 번씩 보낸다.
+# 카운트다운은 며칠 남았는지만 말한다. **채웠는지는 따로 봐야 한다.**
+# 400MW 문턱을 넘는 순간과, 기한 당일의 충족·미충족 판정을 별도 사건으로 만든다.
 COVENANT_MARKS = (90, 60, 30, 14, 7, 3, 1, 0)
 
 
-def covenant_events() -> list[dict]:
-    """약정 기한이 지정한 잔여일에 닿았을 때만 사건으로 만든다."""
+def _covenant_rules():
     try:
         import maturity as mt
-        rules = mt.covenants.__wrapped__() if hasattr(mt.covenants, "__wrapped__") else mt.covenants()
+        return mt.covenants.__wrapped__() if hasattr(mt.covenants, "__wrapped__") else mt.covenants()
     except Exception:
-        return []
+        return None
+
+
+def covenant_events(m: dict | None = None) -> list[dict]:
+    """약정 알림 세 갈래.
+
+    1. 카운트다운 — 정해진 잔여일에 한 번씩
+    2. **문턱 통과** — 계약 MW가 기준을 넘은 순간 (좋은 소식이라 즉시 알린다)
+    3. **기한 당일 판정** — 그날 충족인지 미충족인지 명시
+    """
+    rules = _covenant_rules()
     if rules is None or rules.empty:
         return []
+    contracted = (m or {}).get("mw_contracted") or 0
     events = []
     for row in rules.to_dict("records"):
         left = row.get("남은 일수")
         if left is None or pd.isna(left):
             continue
         left = int(left)
-        # 지난 기한은 알리지 않는다. 지나간 사실은 화면에서 본다.
-        mark = next((m for m in COVENANT_MARKS if left <= m), None)
-        if mark is None or left < 0:
-            continue
         deadline = pd.Timestamp(row["deadline"]).date()
-        events.append({
-            "id": f"covenant:{deadline}:{mark}",
+        threshold = row.get("threshold_mw")
+        threshold = float(threshold) if pd.notna(threshold) else None
+        met = threshold is not None and contracted >= threshold
+        base = {
             "tier": "약정", "kind": row.get("facility", ""),
-            "when": str(pd.Timestamp.today().normalize().date()),   # 나이 필터를 통과시킨다
+            "when": str(pd.Timestamp.today().normalize().date()),
             "form": "", "items": "", "excerpt": "",
-            "title": row.get("condition", ""),
-            "url": DASHBOARD_URL,
-            "left": left, "deadline": str(deadline),
-            "consequence": row.get("consequence", ""),
-        })
+            "title": row.get("condition", ""), "url": DASHBOARD_URL,
+            "deadline": str(deadline), "consequence": row.get("consequence", ""),
+            "threshold": threshold, "contracted": contracted, "met": met,
+        }
+
+        # 문턱을 넘었다 — 기한과 무관하게 알린다.
+        if met:
+            events.append({**base, "id": f"covenant:{deadline}:met",
+                           "left": left, "phase": "충족"})
+            continue
+
+        # 기한 당일 또는 지난 뒤 — 미충족을 명시한다. 하루만 보낸다.
+        if left <= 0:
+            if left >= -1:
+                events.append({**base, "id": f"covenant:{deadline}:verdict",
+                               "left": left, "phase": "미충족"})
+            continue
+
+        mark = next((x for x in COVENANT_MARKS if left <= x), None)
+        if mark is None:
+            continue
+        events.append({**base, "id": f"covenant:{deadline}:{mark}",
+                       "left": left, "phase": "카운트다운"})
     return events
 
 
@@ -571,13 +599,33 @@ def compose(event: dict, m: dict) -> str:
                       "핵심 판정 ①과 같은 축을 가리킨다."]
     elif event["tier"] == "약정":
         left = event.get("left", 0)
-        mark = "🔴" if left <= 14 else ("🟡" if left <= 60 else "⏳")
-        lines = [f"{mark} <b>약정 기한 D-{left}</b> · {_escape(event['deadline'])}", "",
-                 f"<b>{_escape(event['kind'])}</b>",
-                 f"조건: {_escape(event['title'])}", "",
-                 f"미충족 시: {_escape(event['consequence'])}", "",
-                 "이 기한은 만기보다 먼저 온다. 테넌트를 못 잡으면 커버리지가 안 오르는 데서 "
-                 "끝나지 않고 <b>상환 부담이 즉시 커진다.</b>"]
+        phase = event.get("phase", "카운트다운")
+        threshold = event.get("threshold")
+        contracted = event.get("contracted") or 0
+        if phase == "충족":
+            lines = [f"🟢 <b>약정 충족 — {_escape(event['deadline'])} 기한</b>", "",
+                     f"<b>{_escape(event['kind'])}</b>",
+                     f"조건: {_escape(event['title'])}", "",
+                     f"계약 {contracted:,.0f} MW ≥ 기준 {threshold:,.0f} MW — <b>충족했다.</b>"]
+        elif phase == "미충족":
+            lines = [f"🔴 <b>약정 미충족 — 기한 {_escape(event['deadline'])} 경과</b>", "",
+                     f"<b>{_escape(event['kind'])}</b>",
+                     f"조건: {_escape(event['title'])}", ""]
+            if threshold:
+                lines.append(f"계약 {contracted:,.0f} MW < 기준 {threshold:,.0f} MW — "
+                             f"<b>{threshold - contracted:,.0f} MW 부족.</b>")
+            lines += ["", f"결과: {_escape(event['consequence'])}"]
+        else:
+            mark = "🔴" if left <= 14 else ("🟡" if left <= 60 else "⏳")
+            lines = [f"{mark} <b>약정 기한 D-{left}</b> · {_escape(event['deadline'])}", "",
+                     f"<b>{_escape(event['kind'])}</b>",
+                     f"조건: {_escape(event['title'])}"]
+            if threshold:
+                lines.append(f"현재 {contracted:,.0f} MW / 기준 {threshold:,.0f} MW "
+                             f"— <b>{threshold - contracted:,.0f} MW 부족</b>")
+            lines += ["", f"미충족 시: {_escape(event['consequence'])}", "",
+                      "이 기한은 만기보다 먼저 온다. 테넌트를 못 잡으면 커버리지가 안 오르는 데서 "
+                      "끝나지 않고 <b>상환 부담이 즉시 커진다.</b>"]
     elif event["tier"] == "테넌트":
         lines = [f"🚨 <b>테넌트 악재 — {_escape(event['kind'])}</b>", "",
                  f"{_escape(event['when'])} · {_escape(event.get('source', ''))}",
@@ -615,7 +663,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
 
     # 첫 실행에는 어차피 보내지 않으므로 원문을 받지 않는다.
     events = (filing_events(filings, read_text=None if first_run else read_text, known=known)
-              + covenant_events()
+              + covenant_events(m)
               + analyst_events(articles)
               + news_events(articles)
               + tenant_events())
