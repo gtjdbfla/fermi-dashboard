@@ -622,9 +622,13 @@ def carry_targets(frame: pd.DataFrame) -> pd.DataFrame:
             targets[idx], basis[idx] = last[broker][0], last[broker][1]
         else:
             targets[idx], basis[idx] = "–", "–"
+    # 별도 열로 두면 표가 11열이 되어 가로 스크롤에 밀린다. 목표가 칸 안에 적는다.
     out = frame.copy()
-    out["목표가"] = [targets[i] for i in out.index]
-    out["목표가 기준일"] = [basis[i] for i in out.index]
+    out["목표가"] = [
+        targets[i] if basis[i] == "–"
+        else f"{targets[i]} ({pd.Timestamp(basis[i]).strftime('%m-%d')} 기준)"
+        for i in out.index
+    ]
     return out
 
 
@@ -643,7 +647,7 @@ def combined(action_frame: pd.DataFrame) -> pd.DataFrame:
     """
     table = ratings()
     extra = action_frame if action_frame is not None else pd.DataFrame()
-    columns = ["", "시점", "증권사", "행동", "등급", "목표가", "목표가 기준일", "이전",
+    columns = ["", "시점", "증권사", "행동", "등급", "목표가", "이전",
                "언급된 이유", "출처", "링크"]
     finviz_url = f"https://finviz.com/quote.ashx?t={TICKER}"
 

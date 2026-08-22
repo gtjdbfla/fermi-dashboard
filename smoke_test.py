@@ -19,6 +19,9 @@ from streamlit.testing.v1 import AppTest
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+EXPECTED_TABS = 10        # 하나라도 줄면 화면이 끝까지 안 그려진 것이다
+
+
 def run_once(label: str, user_agent: str | None) -> bool:
     if user_agent is None:
         os.environ.pop("SEC_USER_AGENT", None)
@@ -33,6 +36,14 @@ def run_once(label: str, user_agent: str | None) -> bool:
         print(f"[FAIL] {label}")
         for exception in app.exception:
             print("   ", exception.value)
+        return False
+
+    # **예외가 없다고 통과시키면 안 된다.** app.py에 구문 오류가 나면 AppTest가 예외를
+    # 올리지 않고 빈 화면을 돌려주는데, 그때 "탭 0개, 예외 없음"으로 OK가 찍혔다.
+    # 화면이 실제로 그려졌는지를 확인해야 검사다.
+    if len(app.tabs) < EXPECTED_TABS:
+        print(f"[FAIL] {label} — 탭이 {len(app.tabs)}개뿐이다(기대 {EXPECTED_TABS}개). "
+              "화면이 끝까지 그려지지 않았다.")
         return False
     print(f"[ OK ] {label} — 탭 {len(app.tabs)}개, 예외 없음")
     return True
