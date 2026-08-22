@@ -528,7 +528,12 @@ def ratings(force: bool = False) -> pd.DataFrame:
         finviz = pool.submit(_finviz_rows)
         yahoo = pool.submit(yahoo_grades)
         tipranks = pool.submit(tipranks_grades)
-        rows = finviz.result() + yahoo.result() + tipranks.result()
+        parts = {"Finviz": finviz.result(), "Yahoo": yahoo.result(),
+                 "TipRanks": tipranks.result()}
+    # 한 소스가 0을 내면 그쪽이 막힌 것이다. 나머지가 채워 주면 겉으론 정상으로 보인다.
+    for name, got in parts.items():
+        dc.record_health(f"등급표/{name}", len(got))
+    rows = [row for got in parts.values() for row in got]
 
     if not rows:
         return dc.load_frame(FINVIZ_CACHE, 86400 * 365) or pd.DataFrame()
@@ -589,6 +594,40 @@ def reasons_by_broker(action_frame: pd.DataFrame) -> dict:
     return found
 
 
+def carry_targets(frame: pd.DataFrame) -> pd.DataFrame:
+    """목표가가 빈 행에 **그 증권사의 직전 목표가**를 이어붙이고, 언제 것인지 표시한다.
+
+    소스가 '유지' 등급에는 목표가를 안 싣는다(TipRanks 실측: 최근 5건 전부 None).
+    유지는 목표가를 바꾸지 않았다는 뜻이므로 직전 값이 그대로 유효한데, 비워 두면
+    화면에서 "최근 리포트에 목표가가 없다"로 읽혀 오해를 부른다.
+
+    검산이 됐다. 이렇게 이어붙인 값들의 평균이 컨센서스와 정확히 맞는다 —
+    UBS $6 · Cantor $8 · Mizuho $11 · Evercore $11 · Stifel $17 → 평균 $10.60,
+    저 $6 / 고 $17. Nasdaq과 TipRanks가 보고한 컨센서스와 같은 값이다.
+
+    추정임이 드러나야 하므로 `목표가 기준일` 열에 출처 날짜를 남긴다.
+    """
+    if frame is None or frame.empty or "목표가" not in frame.columns:
+        return frame
+    order = frame.sort_values("시점").index
+    last: dict[str, tuple[str, str]] = {}
+    targets, basis = {}, {}
+    for idx in order:
+        row = frame.loc[idx]
+        broker, value = row["증권사"], row.get("목표가", "–")
+        if value and value != "–":
+            last[broker] = (value, str(row["시점"]))
+            targets[idx], basis[idx] = value, "–"
+        elif broker in last:
+            targets[idx], basis[idx] = last[broker][0], last[broker][1]
+        else:
+            targets[idx], basis[idx] = "–", "–"
+    out = frame.copy()
+    out["목표가"] = [targets[i] for i in out.index]
+    out["목표가 기준일"] = [basis[i] for i in out.index]
+    return out
+
+
 def combined(action_frame: pd.DataFrame) -> pd.DataFrame:
     """등급표 3소스와 제목 추출을 합쳐 **증권사·날짜당 한 줄**로 만든다.
 
@@ -604,7 +643,8 @@ def combined(action_frame: pd.DataFrame) -> pd.DataFrame:
     """
     table = ratings()
     extra = action_frame if action_frame is not None else pd.DataFrame()
-    columns = ["", "시점", "증권사", "행동", "등급", "목표가", "이전", "언급된 이유", "출처", "링크"]
+    columns = ["", "시점", "증권사", "행동", "등급", "목표가", "목표가 기준일", "이전",
+               "언급된 이유", "출처", "링크"]
     finviz_url = f"https://finviz.com/quote.ashx?t={TICKER}"
 
     rows = []
@@ -668,6 +708,7 @@ def combined(action_frame: pd.DataFrame) -> pd.DataFrame:
         keep.append(row)
 
     out = pd.DataFrame(keep).sort_values("시점", ascending=False).reset_index(drop=True)
+    out = carry_targets(out)
     out[""] = out["행동"].map({"상향": "🟢", "목표가 상향": "🟢", "하향": "🔴",
                               "목표가 인하": "🔴", "신규 커버리지": "🔵",
                               "커버리지 재개": "🔵"}).fillna("⚪")

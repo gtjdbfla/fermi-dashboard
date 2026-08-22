@@ -128,8 +128,15 @@ def nasdaq_news() -> pd.DataFrame:
 def collect() -> pd.DataFrame:
     """세 소스를 병렬로 받아 합치고 같은 기사를 하나로 줄인다."""
     with ThreadPoolExecutor(max_workers=3) as pool:
-        parts = [future.result() for future in
-                 [pool.submit(google_news), pool.submit(yahoo_news), pool.submit(nasdaq_news)]]
+        jobs = {"Google": pool.submit(google_news), "Yahoo": pool.submit(yahoo_news),
+                "Nasdaq": pool.submit(nasdaq_news)}
+        parts = []
+        for name, future in jobs.items():
+            got = future.result()
+            # 소스 하나가 막혀도 나머지가 캐시를 갱신해 정상으로 보인다. 건수를 남긴다.
+            import diskcache as _dc
+            _dc.record_health(f"뉴스/{name}", len(got))
+            parts.append(got)
     frame = pd.concat(parts, ignore_index=True)
     if frame.empty:
         return frame

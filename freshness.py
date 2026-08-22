@@ -168,6 +168,15 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
             "상태": "✅",
         })
 
+    # 소스별 수집 건수 — 부분 실패는 신선도만 봐서는 안 보인다.
+    dead = [name for name, info in dc.health().items() if not info.get("rows")]
+    if dead:
+        records.append({
+            "구분": "⚠️ 점검", "데이터": "수집 실패 소스",
+            "최신 시점": ", ".join(dead), "경과": "–",
+            "갱신 주기": "0건을 반환한 소스", "상태": "⚠️ 지연",
+        })
+
     return pd.DataFrame(records)
 
 

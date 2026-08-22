@@ -253,8 +253,12 @@ def _staleness(m: dict, price_frame) -> list[str]:
     late = rows[rows["상태"].astype(str).str.startswith("⚠️")]
     if late.empty:
         return []
-    return ["⚠️ <b>갱신 지연</b> — " + ", ".join(f"{r['데이터']}({r['경과']})"
-                                             for _, r in late.iterrows())]
+    lines = ["⚠️ <b>갱신 지연</b> — " + ", ".join(f"{r['데이터']}({r['경과']})"
+                                              for _, r in late.iterrows())]
+    dead = [name for name, info in dc.health().items() if not info.get("rows")]
+    if dead:
+        lines.append("⚠️ <b>수집 0건</b> — " + ", ".join(dead))
+    return lines
 
 
 def compose(m, verdicts, state, filings, articles, actions, price_frame, mark) -> str:

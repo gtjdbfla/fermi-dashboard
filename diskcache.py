@@ -63,3 +63,23 @@ def load_frame(name: str, max_age: float) -> pd.DataFrame | None:
         return pd.read_json(_path(name, "frame.json"), orient="split")
     except Exception:
         return None
+
+
+HEALTH_CACHE = "source_health"
+
+
+def record_health(source: str, rows: int) -> None:
+    """소스별 수집 건수를 남긴다.
+
+    **부분 실패가 가장 찾기 어렵다.** 세 소스 중 하나가 죽어도 나머지가 캐시를 갱신하므로
+    신선도 표는 정상으로 보이고, 화면에는 그냥 데이터가 조금 적을 뿐이다. 실제로 Yahoo
+    바스켓 포맷 불일치와 애널리스트 오탐이 그렇게 숨어 있었다. 건수를 기록해 두면
+    0으로 떨어진 소스가 드러난다.
+    """
+    stored = load_json(HEALTH_CACHE, 86400 * 7) or {}
+    stored[source] = {"rows": int(rows), "at": pd.Timestamp.now(tz="UTC").isoformat()}
+    save_json(HEALTH_CACHE, stored)
+
+
+def health() -> dict:
+    return load_json(HEALTH_CACHE, 86400 * 7) or {}
