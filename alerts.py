@@ -87,6 +87,18 @@ LEASE_WORDS = ["lease", "tenant", "colocation", "co-location", "offtake", "off-t
 FINANCE_WORDS = ["note purchase", "convertible note", "indenture", "underwrit", "placement agent",
                  "credit agreement", "term loan", "registration rights", "securities purchase"]
 
+# 페르미를 가리키는 표지. 회사명만으로는 부족하다.
+#
+# 수집된 기사 중 34건이 이름 없이 회사를 가리켰다 — "Three Natural Gas Turbines Reach
+# Houston, Bound for Texas AI Campus", "This Texas billionaire's nuclear-powered data
+# center company faces collapse", "Trump-branded data center project CEO departs".
+# 애널리스트 추출처럼 이름을 엄격히 요구하면 **이런 부정적 기사를 통째로 버린다.**
+# 그래서 알림 판정에는 고유명사를 넓게 잡는다.
+FERMI_MARKS = re.compile(
+    r"\bfermi\b|\bfrmi\b|페르미|matador|amarillo|tensorwave|neugebauer|"
+    r"trump[- ]?(branded|linked)|rick\s+perry", re.I)
+
+
 # 뉴스는 훨씬 엄격하게 건다. '계약·테넌트' 분류만으로는 지금도 38건이 걸려 알림이 못 된다.
 # 서명 동사와 용량/테넌트 명사가 **둘 다** 있어야 한다.
 SIGN_VERBS = r"(sign|signs|signed|signing|execut|enters?\s+into|entered\s+into|ink|inks|inked|" \
@@ -201,6 +213,10 @@ def news_events(articles: pd.DataFrame) -> list[dict]:
     events = []
     for row in articles.itertuples():
         title = str(getattr(row, "title", "") or "")
+        # 어느 회사 얘기인지 먼저 본다. 증권사 오탐(Health Catalyst·Weibo 기사가 페르미
+        # 애널리스트 액션으로 나갔다)과 같은 구멍이 계약 알림에도 있었다.
+        if not FERMI_MARKS.search(title):
+            continue
         lowered = title.lower()
         if not (re.search(SIGN_VERBS, lowered) and re.search(TENANT_NOUNS, lowered)):
             continue
@@ -455,6 +471,70 @@ def compose_state(events: list[dict], m: dict, verdicts: list[dict]) -> str:
     return "\n".join(lines)
 
 
+# ── 주가 움직임의 사유 ────────────────────────────────────────────────────────
+# 알림에 주가만 적으면 그게 이 소식 때문인지 시장 전체가 빠진 건지 알 수 없다.
+# AI 인프라 바스켓(CORZ CRWV SMR OKLO APLD NBIS)과 견줘 개별 요인인지 동행인지 가른다.
+BASKET_GAP = 3.0        # 이 %p 넘게 벌어지면 개별 요인으로 본다
+
+
+def price_context() -> str:
+    """주가 한 줄 + 왜 움직였는지. 실패하면 빈 문자열(알림은 그대로 나간다)."""
+    try:
+        import market
+        import market_flow as mf
+        raw = lambda f: getattr(f, "__wrapped__", f)          # noqa: E731
+        frame, _ = raw(market.load_price)("FRMI")
+        if frame is None or len(frame) < 2:
+            return ""
+        data = frame.dropna(subset=["close"])
+        last, prev = data.iloc[-1], data.iloc[-2]
+        move = (last["close"] / prev["close"] - 1) * 100
+    except Exception:
+        return ""
+
+    line = f"주가 <b>${last['close']:,.2f}</b> · 전일 {move:+.1f}%"
+
+    # 바스켓과 비교
+    try:
+        basket = raw(mf.basket_frame)()
+        if basket is not None and not basket.empty:
+            peers = basket.dropna(subset=["close"]) if "close" in basket.columns else None
+            if peers is not None and {"ticker", "date", "close"} <= set(basket.columns):
+                moves = []
+                for _, g in basket.dropna(subset=["close"]).groupby("ticker"):
+                    g = g.sort_values("date")
+                    if len(g) >= 2:
+                        moves.append((g.iloc[-1]["close"] / g.iloc[-2]["close"] - 1) * 100)
+                if moves:
+                    peer = sum(moves) / len(moves)
+                    gap = move - peer
+                    if abs(gap) >= BASKET_GAP:
+                        line += (f"\n· AI 인프라 바스켓 {peer:+.1f}% → <b>개별 요인</b>"
+                                 f" ({gap:+.1f}%p 차이)")
+                    else:
+                        line += f"\n· AI 인프라 바스켓 {peer:+.1f}% → 섹터 동행"
+    except Exception:
+        pass
+
+    # 같은 날 페르미 기사 중 가장 많이 쓰인 분류를 사유 후보로 제시한다.
+    try:
+        import news as nw
+        articles = raw(nw.cached_articles)()
+        articles["published"] = pd.to_datetime(articles["published"], errors="coerce", utc=True)
+        same_day = articles[articles["published"] >= pd.Timestamp(last["date"]).tz_localize("UTC")]
+        same_day = same_day[same_day["title"].astype(str).apply(
+            lambda t: bool(FERMI_MARKS.search(t)))]
+        if not same_day.empty:
+            top = same_day[same_day["group"] != "기타"]["group"].value_counts()
+            if not top.empty:
+                headline = same_day.iloc[0]["title"]
+                line += (f"\n· 당일 기사 {len(same_day)}건 (최다 {top.index[0]})"
+                         f"\n  <i>{_escape(str(headline)[:64])}</i>")
+    except Exception:
+        pass
+    return line
+
+
 # ── 메시지 ────────────────────────────────────────────────────────────────────
 def _escape(text: str) -> str:
     return html.escape(str(text or ""))
@@ -515,6 +595,9 @@ def compose(event: dict, m: dict) -> str:
 
     lines += ["", f"현재 기록: <b>{contracted:,.0f} MW · 고객 {customers}곳 · 커버리지 "
                   f"{coverage:.1f}%</b>"]
+    context = price_context()
+    if context:
+        lines += ["", context]
     if event.get("url"):
         lines.append(f'\n<a href="{_escape(event["url"])}">원문 보기</a>')
     if DASHBOARD_URL:
