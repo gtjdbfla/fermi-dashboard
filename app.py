@@ -794,6 +794,22 @@ with tabs[7]:
         "핵심 판정 ①과 같은 축인지 확인하기 위해서다."))
     st.caption(fresh.tab_line("analyst", m, price_frame))
 
+    heading("🤖 AI 정리", help_text=(
+        "**AI가 정리한 것이지 검증한 것이 아니다.** 아래 컨센서스·추이·액션과 대시보드의 확정 "
+        "수치를 함께 넣고, 애널리스트 전제가 공시된 사실과 어긋나는 곳을 짚게 했다. 투자 판단이나 "
+        "목표주가는 쓰지 않도록 지시했다.\n\n"
+        "자료가 바뀔 때만 다시 만든다. 크론이 미리 채워 두므로 화면에서 기다리지 않는다."))
+    cached_review = an.cached_review()
+    if cached_review.get("text"):
+        with st.container(border=True):
+            st.markdown(clean_ai(cached_review["text"]))
+        st.caption(f"지문 `{cached_review.get('fingerprint', '')}` · "
+                   f"생성 {str(cached_review.get('generated_at', ''))[:16]}")
+    else:
+        st.info("AI 정리 대기 — 서버 크론이 다음 실행에서 만든다.", icon="🤖")
+
+    st.divider()
+
     consensus = an.consensus()
     if consensus.get("error"):
         st.warning(f"컨센서스를 받지 못했다 — {consensus['error']}", icon="⚠️")
@@ -886,19 +902,6 @@ with tabs[7]:
             "내린 애널리스트 수로, 방향이 바뀌는 시점이 여기서 먼저 보인다."))
         table(pd.DataFrame(eps))
 
-    heading("🤖 AI 정리", help_text=(
-        "**AI가 정리한 것이지 검증한 것이 아니다.** 위 컨센서스·추이·액션과 대시보드의 확정 수치를 "
-        "함께 넣고, 애널리스트 전제가 공시된 사실과 어긋나는 곳을 짚게 했다. 투자 판단이나 "
-        "목표주가는 쓰지 않도록 지시했다.\n\n"
-        "자료가 바뀔 때만 다시 만든다. 크론이 미리 채워 두므로 화면에서 기다리지 않는다."))
-    cached_review = an.cached_review()
-    if cached_review.get("text"):
-        with st.container(border=True):
-            st.markdown(clean_ai(cached_review["text"]))
-        st.caption(f"지문 `{cached_review.get('fingerprint', '')}` · "
-                   f"생성 {str(cached_review.get('generated_at', ''))[:16]}")
-    else:
-        st.info("AI 정리 대기 — 서버 크론이 다음 실행에서 만든다.", icon="🤖")
 
 
 # ── 참고 지표 ─────────────────────────────────────────────────────────────────
