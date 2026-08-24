@@ -77,6 +77,11 @@ WATCHED_ITEMS = {
     "1.01": "중요 계약 체결",
     "1.02": "중요 계약 해지",       # 기존 테넌트 이탈. NuScale이 UAMPS를 잃은 것이 이 항목이다.
     "2.01": "인수·처분 완료",
+    # **8.01을 빠뜨렸던 것이 가장 비싼 실수였다.** 연중 최대 낙폭(-32.76%)을 만든
+    # 2025-12-12 첫 테넌트 이탈 공시가 1.02가 아니라 8.01로 들어왔다. 회사가 어느
+    # 항목에 넣을지는 회사가 정하고, 계약이 '해지'가 아니라 '독점기간 만료'로 끝나면
+    # 8.01이 된다. 10개월간 3건뿐이라 소음도 아니다.
+    "8.01": "기타 중요사건",
 }
 
 # 원문에 이 단어가 있으면 계약 쪽으로 본다.
@@ -346,6 +351,92 @@ def analyst_events(articles: pd.DataFrame) -> list[dict]:
             "이전": row.get("이전", "–"), "이유": row.get("언급된 이유", "–"),
             "출처": row.get("출처", ""),
         })
+    return events
+
+
+# ── 법적·규제 ─────────────────────────────────────────────────────────────────
+# 2026-07-30 EDNY 소환장과 2026-08-03 SEC 문서요구가 8/14 10-Q에 적혀 있었는데
+# 알림이 한 통도 안 갔다. 공시 감지기는 8-K Item 코드만 보고, 뉴스 감지기는 제목에
+# '서명 동사 + 용량 명사'를 요구했기 때문이다. 둘 다 계약 커버리지만 보도록 만든
+# 결과이고, 그 사이로 규제 리스크가 통째로 빠져나갔다.
+#
+# 공시 원문 쪽은 legal.py가 맡는다(가정법 걸러내는 규칙이 거기 있다). 여기서는
+# 뉴스 쪽을 함께 본다 — 공시보다 며칠 빠를 수 있다. 실제로 소환장 기사는 8/17에
+# 났고 10-Q는 8/14였다(기사가 늦은 경우지만 순서는 사건마다 다르다).
+# 낱말 경계를 반드시 양쪽에 건다. 경계 없이 `sues?`로 두면 "Governance Is-sues"가,
+# `sued`로 두면 "is-sued"가 걸린다 — 실측으로 둘 다 오탐을 냈다.
+# 'Citi'가 'Citigroup' 앞부분에 걸려 Weibo 기사를 페르미 애널리스트 액션으로 만든
+# 것과 같은 종류의 버그다.
+LEGAL_NEWS = re.compile(
+    r"\bsubpoena|\bindict|\bgrand jury\b|\bwells notice\b|\bprobe[sd]?\b|"
+    # 맨 'inquiry'는 안 된다. "In Response to Inquiries from London Press"가 걸렸다 —
+    # 언론 문의지 규제 조회가 아니다. 조회는 주체가 붙어 있을 때만 사건으로 본다.
+    r"\binvestigation|\blawsuits?\b|\bsues?\b|\bsued\b|"
+    r"(?:regulatory|government|federal|criminal|sec|doj|ftc|ferc)\s+inquir|"
+    r"\blitigation\b|\bcourt\s+order\b|\binjunction\b|\bindictment\b|"
+    r"소환장|기소|수사|조사|고발|소송", re.I)
+# 애널리스트·실적 기사가 'investigation' 같은 낱말에 걸리는 것을 막는다.
+LEGAL_NEWS_EXCLUDE = r"(price\s+target|analyst|rating|upgrade|downgrade|earnings\s+call|" \
+                     r"options?\s+chain|목표주가)"
+LEGAL_MAX_AGE_DAYS = 14
+
+
+def legal_events(articles: pd.DataFrame | None = None) -> list[dict]:
+    """공시 원문에서 확정된 법적 사건 + 같은 주제의 뉴스."""
+    events = []
+    # 공시가 이미 확정한 사건은 그 핵심 낱말을 기억해 둔다. 같은 낱말을 쓴 기사는
+    # 같은 사건이므로 다시 보내지 않는다 — 소환장 하나에 기사 3건이 붙어 있었다.
+    covered: list[tuple[pd.Timestamp, set]] = []
+    try:
+        import legal as lg
+        for hit in lg.findings():
+            when = pd.to_datetime(hit["filed"], errors="coerce")
+            covered.append((when, {w.lower() for w in
+                                   re.findall(r"subpoena|indictment|grand jury|wells notice|"
+                                              r"investigation|inquiry|lawsuit|litigation",
+                                              hit["text"], re.I)}))
+            events.append({
+                "id": f"legal:{hit['fingerprint']}",
+                "tier": "법적",
+                "kind": hit["form"],
+                "when": hit["filed"],
+                "form": hit["form"], "items": "", "excerpt": hit["text"],
+                "title": "공시 원문에서 확인된 법적·규제 사건",
+                "url": hit["url"],
+                "확정": True,
+            })
+    except Exception:
+        pass
+
+    if articles is not None and not articles.empty:
+        for row in articles.itertuples():
+            title = str(getattr(row, "title", "") or "")
+            if not FERMI_MARKS.search(title):
+                continue
+            lowered = title.lower()
+            if not LEGAL_NEWS.search(lowered):
+                continue
+            if re.search(LEGAL_NEWS_EXCLUDE, lowered):
+                continue
+            published = pd.to_datetime(getattr(row, "published", None), errors="coerce", utc=True)
+            words = set(re.findall(r"[a-z]+", lowered))
+            if any(marks & words and pd.notna(when) and pd.notna(published)
+                   and abs((published.tz_localize(None) - when).days) <= 21
+                   for when, marks in covered):
+                continue
+            key = re.sub(r"[^a-z0-9가-힣]", "", lowered)[:70]
+            events.append({
+                "id": f"legalnews:{key}",
+                "tier": "법적",
+                "kind": "뉴스",
+                "when": str(pd.Timestamp(row.published).date()) if pd.notna(row.published) else "",
+                "form": "", "items": "", "excerpt": "",
+                "title": title,
+                "url": getattr(row, "url", ""),
+                "source": getattr(row, "source", ""),
+                "topic": topic_key(title),
+                "확정": False,
+            })
     return events
 
 
@@ -668,6 +759,22 @@ def compose(event: dict, m: dict) -> str:
             lines += ["", f"미충족 시: {_escape(event['consequence'])}", "",
                       "이 기한은 만기보다 먼저 온다. 테넌트를 못 잡으면 커버리지가 안 오르는 데서 "
                       "끝나지 않고 <b>상환 부담이 즉시 커진다.</b>"]
+    elif event["tier"] == "법적":
+        confirmed = event.get("확정")
+        if confirmed:
+            lines = [f"⚖️ <b>법적·규제 — 공시 확정</b>", "",
+                     f"{_escape(event['when'])} · {_escape(event['form'])} 원문", "",
+                     f"<blockquote>{_escape(event['excerpt'])}</blockquote>", "",
+                     "공시 원문에서 확인된 <b>실제 사건</b>이다. 위험요인의 가정법 문장은 "
+                     "걸러냈다."]
+        else:
+            lines = [f"⚖️ <b>법적·규제 — 뉴스</b>", "",
+                     f"{_escape(event['when'])} · {_escape(event.get('source', ''))}",
+                     f"<i>{_escape(event['title'])}</i>", "",
+                     "공시로 확정되기 전까지는 소문으로 취급한다."]
+        lines += ["", "법적 리스크는 계약 커버리지를 직접 바꾸지는 않는다. 다만 "
+                      "<b>재융자와 테넌트 실사에 걸린다</b> — 2027-08-10 만기 $444.9M을 "
+                      "다시 빌려야 하고, 15년 리스에 서명할 고객은 이 항목을 반드시 본다."]
     elif event["tier"] == "내부자":
         item = event["insider"]
         totals = event.get("tally") or {}
@@ -749,6 +856,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
               + covenant_events(m)
               + analyst_events(articles)
               + insider_events()
+              + legal_events(articles)
               + news_events(articles)
               + tenant_events())
 
@@ -769,7 +877,8 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
             continue
         limit = {"미확인": NEWS_MAX_AGE_DAYS, "테넌트": NEWS_MAX_AGE_DAYS,
                  "애널리스트": ANALYST_MAX_AGE_DAYS,
-                 "내부자": INSIDER_MAX_AGE_DAYS}.get(event["tier"], MAX_EVENT_AGE_DAYS)
+                 "내부자": INSIDER_MAX_AGE_DAYS,
+                 "법적": LEGAL_MAX_AGE_DAYS}.get(event["tier"], MAX_EVENT_AGE_DAYS)
         when = pd.to_datetime(event.get("when"), errors="coerce")
         if pd.notna(when) and (today - when).days > limit:
             aged_ids.append(event["id"])
