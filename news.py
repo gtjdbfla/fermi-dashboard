@@ -58,8 +58,11 @@ GROUP_ICON = {"계약·테넌트": "🎯", "자금조달": "💰", "일정·리�
 # 기사가 많고 하필 그게 중요한 것들이다 — "Mystery solved: Amazon is the prospective
 # tenant...", "CEO's exit casts doubt on massive Texas data center plan",
 # "This Texas billionaire's nuclear-powered data center company faces collapse".
-# 확인해보니 그런 기사는 **전부 news.google.com**에서 오고 야후에서는 하나도 안 온다.
-# 그래서 야후 수집기에만 건다.
+# 확인해보니 그런 기사는 **전부 news.google.com**에서 온다. 야후와 나스닥에서는
+# 하나도 안 온다. 그래서 그 두 수집기에만 걸고 구글은 건드리지 않는다.
+#
+# 나스닥도 종목 페이지에 '관련 뉴스'를 끼워 넣는다. 실측하면 표지 없는 10건이 전부
+# 무관했다 — Energy Transfer 4건, 배당 ETF, Anthropic IPO, 고배당주 추천.
 RELEVANT = re.compile(
     r"\bfermi\b|\bfrmi\b|페르미|matador|amarillo|tensorwave|neugebauer|mcintire|"
     r"trump[- ]?(branded|linked)|rick\s+perry", re.I)
@@ -143,7 +146,7 @@ def nasdaq_news() -> pd.DataFrame:
         "published": pd.to_datetime(row.get("created"), errors="coerce", utc=True),
         "title": row.get("title", ""), "source": row.get("publisher") or "Nasdaq",
         "url": ("https://www.nasdaq.com" + row["url"]) if row.get("url", "").startswith("/") else row.get("url", ""),
-    } for row in rows])
+    } for row in rows if RELEVANT.search(str(row.get("title", "")))])
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
