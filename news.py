@@ -49,6 +49,28 @@ PRIORITY = {name: index for index, (name, _) in enumerate(KEYWORD_GROUPS)}
 GROUP_ICON = {"계약·테넌트": "🎯", "자금조달": "💰", "일정·리스크": "⚠️",
               "실적·전망": "📊", "기타": "·"}
 
+# 야후 검색 엔드포인트(q=FRMI)는 커버리지가 얇은 종목에서 **아무 시황 기사나 돌려준다.**
+# 실측: 응답 10건 중 페르미 기사 0건 — 세리에A 축구 결과, 바르셀로나 경기, 마이크론 CEO,
+# 다우 선물, 하와이 헬기 추락 소송이 '페르미 뉴스'로 들어왔다. 8/24 아침 리포트가
+# "기사 22건"이라고 적었는데 그중 페르미 기사는 2건이었다.
+#
+# **제목 필터를 전체에 걸면 안 된다.** 구글 뉴스 쪽에는 회사명 없이 회사를 가리키는
+# 기사가 많고 하필 그게 중요한 것들이다 — "Mystery solved: Amazon is the prospective
+# tenant...", "CEO's exit casts doubt on massive Texas data center plan",
+# "This Texas billionaire's nuclear-powered data center company faces collapse".
+# 확인해보니 그런 기사는 **전부 news.google.com**에서 오고 야후에서는 하나도 안 온다.
+# 그래서 야후 수집기에만 건다.
+RELEVANT = re.compile(
+    r"\bfermi\b|\bfrmi\b|페르미|matador|amarillo|tensorwave|neugebauer|mcintire|"
+    r"trump[- ]?(branded|linked)|rick\s+perry", re.I)
+
+# 기계가 찍어내는 시세 페이지. 표지는 있지만 읽을 내용이 없다.
+# 알림의 '당일 기사' 맥락에 "FRMI 260821 7.00P Options Chain"이 대표 헤드라인으로
+# 올라온 적이 있다. 어느 소스에서 오든 버린다.
+BOILERPLATE = re.compile(
+    r"options?\s+chain|stock community|quotes\s*&\s*news|"
+    r"short\s+interest|price\s+target\s+history", re.I)
+
 
 def classify(title: str) -> str:
     lowered = (title or "").lower()
@@ -103,7 +125,7 @@ def yahoo_news() -> pd.DataFrame:
         "published": pd.to_datetime(item.get("providerPublishTime"), unit="s", errors="coerce", utc=True),
         "title": item.get("title", ""), "source": item.get("publisher", "Yahoo"),
         "url": item.get("link", ""),
-    } for item in items])
+    } for item in items if RELEVANT.search(str(item.get("title", "")))])
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -142,6 +164,7 @@ def collect() -> pd.DataFrame:
         return frame
     frame = frame.dropna(subset=["title"])
     frame = frame[frame["title"].str.strip() != ""]
+    frame = frame[~frame["title"].str.contains(BOILERPLATE, na=False)]
     # 매체마다 제목 표기가 조금씩 달라 기호·공백을 지운 형태로 중복을 잡는다.
     frame["key"] = frame["title"].str.lower().str.replace(r"[^a-z0-9가-힣]", "", regex=True).str[:70]
     frame = frame.drop_duplicates("key").drop(columns="key")
