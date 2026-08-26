@@ -354,6 +354,44 @@ def analyst_events(articles: pd.DataFrame) -> list[dict]:
     return events
 
 
+# ── 건설 속도 ─────────────────────────────────────────────────────────────────
+# 가동 중 MW가 0인 회사에서 **건설 속도는 유일하게 관측 가능한 실적**이다. 그런데
+# 건설이 늦춰지는 것은 공시로 따로 나오지 않고 분기 현금흐름표에 숫자로만 남는다.
+# 실제로 2026Q2에 전분기 대비 -58%가 이미 벌어졌고(그 분기에 CEO가 해임됐다),
+# 알림은 한 통도 없었다.
+#
+# 사건 날짜는 분기말이 아니라 **10-Q가 접수된 날**이다. 6/30을 쓰면 나이 제한에
+# 걸려 영원히 안 나간다.
+CAPEX_MAX_AGE_DAYS = 14
+
+
+def capex_events(m: dict | None, filings: pd.DataFrame | None = None) -> list[dict]:
+    """분기 capex가 직전 분기와 직전 4분기 평균 대비 동시에 꺾였을 때만."""
+    try:
+        import capex as cx
+        verdict = cx.assess(m)
+    except Exception:
+        return []
+    if not verdict or not verdict["triggered"]:
+        return []
+    filed, source_url = None, ""
+    try:
+        filed, source_url = cx.reported_on(filings, verdict["end"])
+    except Exception:
+        pass
+    when = filed if filed is not None else verdict["end"]
+    return [{
+        "id": f"capex:{verdict['quarter']}",
+        "tier": "건설속도",
+        "kind": verdict["quarter"],
+        "when": str(pd.Timestamp(when).date()),
+        "form": "10-Q", "items": "", "excerpt": "",
+        "title": f"{verdict['quarter']} 분기 capex 급감",
+        "url": source_url or DASHBOARD_URL,
+        "capex": verdict,
+    }]
+
+
 # ── 법적·규제 ─────────────────────────────────────────────────────────────────
 # 2026-07-30 EDNY 소환장과 2026-08-03 SEC 문서요구가 8/14 10-Q에 적혀 있었는데
 # 알림이 한 통도 안 갔다. 공시 감지기는 8-K Item 코드만 보고, 뉴스 감지기는 제목에
@@ -759,6 +797,20 @@ def compose(event: dict, m: dict) -> str:
             lines += ["", f"미충족 시: {_escape(event['consequence'])}", "",
                       "이 기한은 만기보다 먼저 온다. 테넌트를 못 잡으면 커버리지가 안 오르는 데서 "
                       "끝나지 않고 <b>상환 부담이 즉시 커진다.</b>"]
+    elif event["tier"] == "건설속도":
+        v = event["capex"]
+        trail = " → ".join(f"{label} ${value/1e6:,.0f}M" for label, value in v["trail"])
+        lines = [f"🏗️ <b>건설 속도 급감 — {_escape(v['quarter'])}</b>", "",
+                 f"분기 capex <b>${v['current']/1e6:,.0f}M</b>",
+                 f"직전 분기({_escape(v['prev_quarter'])}) ${v['previous']/1e6:,.0f}M 대비 "
+                 f"<b>-{v['drop_prev']*100:.0f}%</b>",
+                 f"직전 {v['baseline_n']}분기 평균 ${v['baseline']/1e6:,.0f}M 대비 "
+                 f"<b>-{v['drop_avg']*100:.0f}%</b>", "",
+                 f"<b>궤적</b>  {_escape(trail)}", "",
+                 "가동 중 MW가 0인 동안 <b>건설 속도가 유일하게 관측 가능한 실적</b>이다. "
+                 "건설 지연은 공시로 따로 나오지 않고 이 숫자로만 남는다.", "",
+                 "다만 capex는 원래 울퉁불퉁하다 — 터빈 대금 같은 큰 건이 한 분기에 몰리면 "
+                 "다음 분기는 자연히 준다. <b>두 분기 연속 꺾이는지</b>를 봐야 확정이다."]
     elif event["tier"] == "법적":
         confirmed = event.get("확정")
         if confirmed:
@@ -856,6 +908,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
               + covenant_events(m)
               + analyst_events(articles)
               + insider_events()
+              + capex_events(m, filings)
               + legal_events(articles)
               + news_events(articles)
               + tenant_events())
@@ -878,6 +931,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
         limit = {"미확인": NEWS_MAX_AGE_DAYS, "테넌트": NEWS_MAX_AGE_DAYS,
                  "애널리스트": ANALYST_MAX_AGE_DAYS,
                  "내부자": INSIDER_MAX_AGE_DAYS,
+                 "건설속도": CAPEX_MAX_AGE_DAYS,
                  "법적": LEGAL_MAX_AGE_DAYS}.get(event["tier"], MAX_EVENT_AGE_DAYS)
         when = pd.to_datetime(event.get("when"), errors="coerce")
         if pd.notna(when) and (today - when).days > limit:
