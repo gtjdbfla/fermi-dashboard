@@ -212,6 +212,7 @@ def analyze(fingerprint_key: str, payload: str, facts: dict) -> tuple[str, str]:
     store = _read_cache()
     cached = store.get(fingerprint_key)
     if cached:
+        dc.touch("ai_review")     # 점검했다는 사실을 남긴다(analyst.review 주석 참고)
         return cached, ""
     previous = list(store.values())[-1] if store else ""
 

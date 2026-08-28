@@ -110,6 +110,7 @@ def run(m: dict, reviewed_through, force: bool = False) -> dict:
     if not force:
         cached = dc.load_json(CACHE_NAME, MAX_AGE)
         if cached and cached.get("fingerprint") == key:
+            dc.touch(CACHE_NAME)      # 점검했다는 사실을 남긴다(analyst.review 주석 참고)
             return cached
 
     payload = []

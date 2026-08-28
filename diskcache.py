@@ -9,6 +9,7 @@ data/.cache/는 볼륨이라 재기동을 견디고 프로세스도 공유한다
 """
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -83,3 +84,23 @@ def record_health(source: str, rows: int) -> None:
 
 def health() -> dict:
     return load_json(HEALTH_CACHE, 86400 * 7) or {}
+
+
+def touch(name: str, suffix: str = "json") -> None:
+    """내용을 바꾸지 않고 '방금 확인했다'만 기록한다(파일 mtime 갱신).
+
+    **지문 기반 캐시는 내용이 바뀔 때만 파일을 쓴다.** 그래서 age_seconds가 재는 것이
+    '분석이 낡았는가'가 아니라 '자료가 안 바뀐 지 얼마나 됐는가'가 된다. 애널리스트
+    정리는 자료가 주 단위로 바뀌는데 지연 문턱은 1.5시간이라, 경고가 사실상 항상
+    켜져 있었다. 항상 켜진 경고는 없는 것보다 나쁘다 — 진짜 고장을 못 보게 만든다.
+
+    그래서 크론이 확인만 하고 지나갈 때도 이걸 불러, mtime이 '마지막 점검 시각'을
+    뜻하게 한다. 내용을 언제 만들었는지는 payload의 generated_at이 따로 들고 있다.
+    """
+    path = _path(name, suffix)
+    if path.exists():
+        now = time.time()
+        try:
+            os.utime(path, (now, now))
+        except OSError:
+            pass

@@ -850,6 +850,10 @@ def review(key: str, text_payload: str, facts: dict, force: bool = False) -> tup
     """(정리 텍스트, 오류). 지문이 같으면 캐시를 재사용한다."""
     cached = dc.load_json(REVIEW_CACHE, REVIEW_MAX_AGE) or {}
     if not force and cached.get("fingerprint") == key:
+        # 자료가 안 바뀌었으니 AI를 부를 이유가 없다. 다만 **점검했다는 사실은 남긴다** —
+        # 안 그러면 신선도 표가 '자료가 안 바뀐 시간'을 '분석이 낡은 시간'으로 읽어
+        # 경고가 영구히 켜진다(실제로 6.4시간짜리 헛경고가 리포트에 떴다).
+        dc.touch(REVIEW_CACHE)
         return cached.get("text", ""), ""
     if not os.environ.get("GEMINI_API_KEY"):
         return "", "GEMINI_API_KEY가 설정되지 않았다."

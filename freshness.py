@@ -46,6 +46,15 @@ TAB_SOURCES = {
 }
 
 
+def _made_at(cache: str, field: str) -> str | None:
+    """AI 캐시 payload에 적힌 '내용을 만든 시각'. 파일 mtime(=마지막 점검)과 다르다."""
+    stored = dc.load_json(cache, 86400 * 30) or {}
+    when = pd.to_datetime(stored.get(field), errors="coerce", utc=True)
+    if pd.isna(when):
+        return None
+    return when.tz_convert("Asia/Seoul").strftime("%m-%d %H:%M 생성")
+
+
 def _ago(seconds: float | None) -> str:
     if seconds is None:
         return "없음"
@@ -114,15 +123,19 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
 
     # ── 크론 빠른층(30분) ─────────────────────────────────────────────────────
     add("30분", "뉴스·커뮤니티", None, dc.age_seconds("articles", "json"), "크론 30분")
-    add("30분", "공시 판독(AI)", None, dc.age_seconds("filing_review", "json"), "새 공시 있을 때")
+    add("30분", "공시 판독(AI)", _made_at("filing_review", "generated_at"),
+        dc.age_seconds("filing_review", "json"), "새 공시 있을 때 · 점검은 30분마다")
     add("30분", "뉴스 정리(AI)", None, dc.age_seconds("ai_review", "json"),
-        "새 기사 있을 때 · 최소 2시간 간격")
+        "새 기사 있을 때 · 점검은 30분마다")
     add("30분", "애널리스트 액션", None, dc.age_seconds("analyst_headlines", "frame.json"),
         "크론 30분 · 뉴스 제목에서 추출")
     add("30분", "증권사 등급표", None, dc.age_seconds("analyst_ratings", "frame.json"),
         "크론 30분 · Finviz+Yahoo+TipRanks")
-    add("30분", "애널리스트 정리(AI)", None, dc.age_seconds("analyst_review", "json"),
-        "자료 바뀔 때 · 최소 2시간 간격")
+    # 지문 기반 AI 캐시는 **자료가 바뀔 때만** 새로 만든다. 그래서 '경과'는 마지막
+    # 점검 시각이고, 내용이 언제 만들어졌는지는 따로 보여줘야 한다. 둘을 뭉뚱그리면
+    # "6.4시간 지연" 같은 헛경고가 뜬다 — 실제로는 자료가 안 바뀐 것뿐이었다.
+    add("30분", "애널리스트 정리(AI)", _made_at("analyst_review", "generated_at"),
+        dc.age_seconds("analyst_review", "json"), "자료 바뀔 때 · 점검은 30분마다")
 
     import alerts
     state = alerts.status()
