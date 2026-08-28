@@ -106,10 +106,19 @@ FERMI_MARKS = re.compile(
 
 # 뉴스는 훨씬 엄격하게 건다. '계약·테넌트' 분류만으로는 지금도 38건이 걸려 알림이 못 된다.
 # 서명 동사와 용량/테넌트 명사가 **둘 다** 있어야 한다.
-SIGN_VERBS = r"(sign|signs|signed|signing|execut|enters?\s+into|entered\s+into|ink|inks|inked|" \
-             r"secur|award|finaliz|close[sd]?\s+on|definitive|binding|체결|계약을\s*맺)"
-TENANT_NOUNS = r"(tenant|lease|offtake|off-take|take-or-pay|colocation|co-location|hyperscaler|" \
-               r"anchor\s+customer|\d\s*(mw|gw)\b|megawatt|gigawatt|테넌트|임차|임대차)"
+# **낱말 경계를 반드시 건다.** 이 세션에서 같은 종류 버그가 네 번 나왔다 —
+#   Citi ⊂ Citigroup   sues ⊂ Issues   sued ⊂ issued   lease ⊂ Release
+# 마지막 것 때문에 "Fermi Announces Second Quarter Earnings **Release** and Call
+# Date"가 계약 뉴스로 잡혔다. 부분 문자열은 반드시 다른 낱말 안에 숨어 있다.
+SIGN_VERBS = r"(\bsigns?\b|\bsigned\b|\bsigning\b|\bexecutes?\b|\bexecuted\b|\bexecuting\b|" \
+             r"\benters?\s+into\b|\bentered\s+into\b|\binks?\b|\binked\b|" \
+             r"\bsecures?\b|\bsecured\b|\bsecuring\b|\bawards?\b|\bawarded\b|" \
+             r"\bfinaliz\w*|\bcloses?\s+on\b|\bclosed\s+on\b|\bdefinitive\b|" \
+             r"(?<!non-)(?<!non)\bbinding\b|체결|계약을\s*맺)"
+TENANT_NOUNS = r"(\btenants?\b|\bleases?\b|\bleasing\b|\bofftake\b|\boff-take\b|\btake-or-pay\b|" \
+               r"\bcolocation\b|\bco-location\b|\bhyperscalers?\b|" \
+               r"\banchor\s+customer\b|\d\s*(mw|gw)\b|\bmegawatts?\b|\bgigawatts?\b|" \
+               r"테넌트|임차|임대차)"
 # 자금조달 기사가 서명 동사에 걸려 들어오는 것을 막는다.
 NEWS_EXCLUDE = r"(convertible|offering|notes\s+due|underwrit|placement|dilut|증자|사채|" \
                r"price\s+target|analyst|목표주가)"
@@ -117,6 +126,29 @@ NEWS_EXCLUDE = r"(convertible|offering|notes\s+due|underwrit|placement|dilut|증
 # 2025-09 Siemens LOI가 이 부류였고, 계약처럼 읽히면 판단을 흐린다.
 NONBINDING = r"(letter\s+of\s+intent|\bloi\b|\bmou\b|memorandum|non-?binding|framework|" \
              r"preliminary|의향서|양해각서)"
+
+# **약한 동사도 잡되, 반드시 비구속으로 표시한다.**
+#
+# 2026-08-11 Hillcore BOOT 제휴(2.6GW)가 알림 문턱을 못 넘었다. 제목이 "Hillcore
+# Targets First Power Within 24 Months of Notice to Proceed"였는데 'targets'는
+# 서명 동사가 아니어서다. 수집은 됐지만 알림이 안 갔다.
+#
+# 확인해보니 실제로 구속력 있는 계약이 아니었다(원문이 framework agreement이고
+# 전용 8-K도 없다). 즉 **문턱은 옳게 작동했지만, 그래도 알았어야 할 소식**이었다.
+# 2.6GW짜리 발전 제휴는 커버리지를 안 바꿔도 판단 재료다.
+#
+# 그래서 약한 동사는 통과시키되 등급을 낮춰 보낸다. 이 동사로만 걸린 건은
+# NONBINDING 표기가 없어도 무조건 '비구속 가능성'으로 찍는다 — 강한 동사가 없다는
+# 것 자체가 아직 서명 전이라는 신호다.
+WEAK_VERBS = r"(\btargets?\b|\btargeting\b|\bplans?\b|\bplanning\b|\bplanned\b|" \
+             r"\bannounces?\b|\bannounced\b|\bunveils?\b|\bunveiled\b|" \
+             r"\bpartners?\s+with\b|\balliance\b|\bteams?\s+up\b|" \
+             r"\bto\s+build\b|\bto\s+develop\b|\bto\s+supply\b|추진|계획|발표)"
+
+# 약한 동사는 문턱을 낮추므로 회사가 정기적으로 내는 안내문이 함께 들어온다.
+# "Announces Second Quarter Earnings Release and Call Date"가 그랬다.
+ROUTINE_NOTICE = r"(earnings\s+(release|call|date)|conference\s+call|webcast|" \
+                 r"investor\s+day|annual\s+meeting|results\s+date|실적\s*발표\s*일정)"
 
 
 # ── 텔레그램 ──────────────────────────────────────────────────────────────────
@@ -212,7 +244,12 @@ def filing_events(filings: pd.DataFrame, read_text=None, known: set | None = Non
 
 
 def news_events(articles: pd.DataFrame) -> list[dict]:
-    """제목에 '서명 동사 + 용량/테넌트 명사'가 함께 있는 기사만."""
+    """제목에 '동사 + 용량/테넌트 명사'가 함께 있는 기사.
+
+    동사는 두 등급이다. 강한 동사(서명·체결)는 계약으로, 약한 동사(targets·plans·
+    alliance)는 **무조건 비구속으로** 찍는다. 약한 쪽을 아예 버리면 Hillcore 2.6GW
+    제휴 같은 판단 재료를 통째로 놓친다.
+    """
     if articles is None or articles.empty:
         return []
     events = []
@@ -223,15 +260,30 @@ def news_events(articles: pd.DataFrame) -> list[dict]:
         if not FERMI_MARKS.search(title):
             continue
         lowered = title.lower()
-        if not (re.search(SIGN_VERBS, lowered) and re.search(TENANT_NOUNS, lowered)):
+        if not re.search(TENANT_NOUNS, lowered):
+            continue
+        strong = bool(re.search(SIGN_VERBS, lowered))
+        weak = bool(re.search(WEAK_VERBS, lowered))
+        if not (strong or weak):
             continue
         if re.search(NEWS_EXCLUDE, lowered):
             continue
+        # 정기 안내문은 약한 동사에만 걸린다. 계약과 무관하다.
+        if weak and not strong and re.search(ROUTINE_NOTICE, lowered):
+            continue
+        # 강한 동사가 없으면 아직 서명 전이다. NONBINDING 표기가 제목에 없더라도
+        # 비구속으로 찍는다 — 'targets'만 있는 소식을 계약처럼 읽으면 판단이 흐려진다.
+        if not strong:
+            kind = "비구속(계획·제휴)"
+        elif re.search(NONBINDING, lowered):
+            kind = "비구속(LOI/MOU)"
+        else:
+            kind = "계약"
         key = re.sub(r"[^a-z0-9가-힣]", "", lowered)[:70]
         events.append({
             "id": f"news:{key}",
             "tier": "미확인",
-            "kind": "비구속(LOI/MOU)" if re.search(NONBINDING, lowered) else "계약",
+            "kind": kind,
             "when": str(pd.Timestamp(row.published).date()) if pd.notna(row.published) else "",
             "form": "",
             "items": "",
@@ -877,11 +929,17 @@ def compose(event: dict, m: dict) -> str:
     else:
         nonbinding = event["kind"].startswith("비구속")
         head = f"{'⚪' if nonbinding else icon} <b>뉴스 — {_escape(event['kind'])}</b>"
+        if event["kind"] == "비구속(계획·제휴)":
+            tail = ("제목에 <b>서명·체결 동사가 없다</b> — 아직 계획·제휴 단계로 보인다. "
+                    "커버리지는 바뀌지 않지만 규모가 크면 판단 재료다. "
+                    "8-K Item 1.01로 확정되는지 확인해야 한다.")
+        elif nonbinding:
+            tail = "LOI·MOU는 구속력이 없어 커버리지를 바꾸지 않는다."
+        else:
+            tail = "공시로 확정되기 전까지는 소문으로 취급한다."
         lines = [head, "",
                  f"{_escape(event['when'])} · {_escape(event.get('source', ''))}",
-                 f"<i>{_escape(event['title'])}</i>", "",
-                 "LOI·MOU는 구속력이 없어 커버리지를 바꾸지 않는다." if nonbinding
-                 else "공시로 확정되기 전까지는 소문으로 취급한다."]
+                 f"<i>{_escape(event['title'])}</i>", "", tail]
 
     lines += ["", f"현재 기록: <b>{contracted:,.0f} MW · 고객 {customers}곳 · 커버리지 "
                   f"{coverage:.1f}%</b>"]
