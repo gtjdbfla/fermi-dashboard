@@ -155,6 +155,25 @@ def _to_html(text: str) -> str:
     return out.strip()
 
 
+_NO_NEWS = re.compile(r"(새 소식|소식이? ?없|변동 ?없|특이사항 ?없)")
+
+
+def _strip_empty_tag(text: str) -> str:
+    """'새 소식 없음' 줄에 붙은 근거 표시를 뗀다.
+
+    "· 판정을 바꿀 새 소식 없음 [기사]"로 나간 적이 있다. 모든 줄에 근거를 붙이라는
+    규칙이 '전할 것이 없다'는 문장에까지 적용된 것이다. 없는 소식의 출처가 기사일 수는
+    없다. 프롬프트로도 막지만, 이 세션에서 프롬프트 규칙이 이미 한 번 되돌아간 적이
+    있어 코드로도 확인한다.
+    """
+    out = []
+    for line in str(text or "").splitlines():
+        if _NO_NEWS.search(line):
+            line = re.sub(r"\s*\[(공시|기사|애널리스트|내부자|건설|추측)\]\s*$", "", line)
+        out.append(line)
+    return "\n".join(out)
+
+
 def _mostly_korean(text: str, threshold: float = 0.15) -> bool:
     """한글 비중이 이 정도는 돼야 한국어 브리핑이다.
 
@@ -215,12 +234,15 @@ def _summary_prompt(payload: str, facts: dict, state: str = "") -> str:
 - **법적·규제 사건과 계약 해지·테넌트 이탈은 반드시 독립된 한 줄**로 써라.
   다른 소식과 한 문장에 묶지 마라 — 묶으면 나쁜 소식이 좋은 소식에 가려진다.
   이 줄은 3줄 상한 밖으로 따로 세어도 된다(최대 4줄).
-- 각 줄 끝에 근거를 붙여라 — [공시] [기사] [애널리스트] [내부자] [건설] 중 하나.
+- **구체적인 항목을 전하는 줄에만** 근거를 붙여라 —
+  [공시] [기사] [애널리스트] [내부자] [건설] 중 하나.
+  전할 항목이 없다는 말에는 근거를 붙이지 마라. 출처가 없는 문장이기 때문이다.
 - 마지막 줄은 **판정 대조**다. 위 '현재 상태'의 판정 세 개를 근거로,
   오늘 소식이 그걸 바꾸는지 쓴다. 예: `→ 판정 ① 불변 (커버리지 15% 그대로)`
   상태에 적힌 값을 근거 없이 바꿔 말하지 마라.
 - 약정 기한이 30일 이내면 마지막 줄에 D-day를 반드시 함께 적어라.
-- 새로운 내용이 없으면 `· 판정을 바꿀 새 소식 없음` + 판정 대조 줄, 두 줄만.
+- 새로운 내용이 없으면 두 줄만 쓴다. 첫 줄은 근거 표시 **없이**
+  `· 판정을 바꿀 새 소식 없음`, 둘째 줄은 판정 대조 줄.
 
 ## 규칙
 - 자료에 적힌 것만 써라. 지어내지 마라.
@@ -302,6 +324,7 @@ def _ai_summary(fresh: pd.DataFrame, m: dict, extra: list[str] | None = None,
     if error or not text:
         print(f"[warn] 기사 요약 실패: {error or '빈 응답'}")
         return []
+    text = _strip_empty_tag(text)
     dc.save_json(DIGEST_CACHE, {"fingerprint": key, "text": text,
                                 "at": pd.Timestamp.now(tz="UTC").isoformat()})
     return _to_html(text).splitlines()
