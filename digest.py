@@ -283,6 +283,10 @@ def _summary_prompt(payload: str, facts: dict, state: str = "") -> str:
 - 같은 사건을 여러 매체가 쓴 것은 한 줄로 합쳐라.
 - LOI·MOU·framework는 구속력 있는 계약이 아니다.
 - 13F·지분공시 기사는 **두 달 묵은 정보**다. 그렇게 표시해라.
+- `[찌라시]`로 들어온 것은 검증되지 않은 개인 글이다. 근거는 `[추측]`으로 달고,
+  **여러 사람이 같은 주장을 반복하거나 확인 가능한 구체적 내용일 때만** 써라.
+  "간다/올인" 같은 감정 표현은 쓰지 마라. 공시·기사와 같은 무게로 다루지 마라.
+  찌라시가 공시와 어긋나면 **공시가 맞다**고 적어라.
 - 내부자 '부여(A)'는 매수가 아니다. 매수는 코드 P뿐이다.
 - **투자 판단·매수매도 권유·목표주가를 쓰지 마라.**
 - **마크다운 제목이나 LaTeX을 쓰지 마라.** 굵게는 **이렇게**만 허용한다."""
@@ -374,6 +378,41 @@ def _new_articles(fresh: pd.DataFrame) -> list[str]:
         return []
     hits = fresh[fresh["group"] == "계약·테넌트"] if "group" in fresh.columns else fresh.head(0)
     return [f"📰 기사 {len(fresh)}건 (계약·테넌트 {len(hits)}건)"]
+
+
+# 커뮤니티 글은 대부분 잡담이다("50달러 간다", "올인했다"). 그대로 40건을 넣으면
+# AI가 그걸 요약하느라 공시를 밀어낸다. **구체적 주장이 담긴 것만** 고른다 —
+# 숫자·고유명사·거래상대·규제가 언급된 글. 실제로 그렇게 걸러야 "backstop 협상
+# 진행 중" 같은 검증 대상이 남고 "🚀🚀🚀"가 빠진다.
+_CHATTER_SUBSTANCE = re.compile(
+    r"backstop|tenant|테넌트|lease|계약|contract|subpoena|소환|sec\b|investigation|"
+    r"bankrupt|파산|chapter\s*11|delist|상장폐지|going concern|dilut|증자|"
+    r"\d{2,4}\s*(?:mw|gw)\b|\$\d|guidance|earnings|hyperscaler|amazon|microsoft|google|"
+    r"오라클|oracle|meta\b|nvidia", re.I)
+MAX_CHATTER = 8
+
+
+def _new_community(mark: pd.Timestamp) -> tuple[list[str], list[str]]:
+    """(화면줄, AI에 넣을 줄). 찌라시는 검증되지 않았으므로 등급을 못 박아 넘긴다."""
+    try:
+        import news as nw
+        chatter = getattr(nw.cached_community, "__wrapped__", nw.cached_community)()
+    except Exception:
+        return [], []
+    if chatter is None or chatter.empty or "published" not in chatter.columns:
+        return [], []
+    published = pd.to_datetime(chatter["published"], errors="coerce", utc=True)
+    fresh = chatter[published >= mark]
+    if fresh.empty:
+        return [], []
+    picked = fresh[fresh["body"].astype(str).str.contains(_CHATTER_SUBSTANCE, na=False)]
+    lines = [f"💬 커뮤니티 {len(fresh)}건 (내용 있는 글 {len(picked)}건)"]
+    payload = []
+    for row in picked.head(MAX_CHATTER).itertuples():
+        when = pd.to_datetime(row.published, errors="coerce", utc=True)
+        stamp = when.tz_convert("Asia/Seoul").strftime("%m-%d %H:%M") if pd.notna(when) else "?"
+        payload.append(f"[찌라시 {stamp}] (검증 안 됨) {str(row.body)[:220]}")
+    return lines, payload
 
 
 def _new_legal(mark: pd.Timestamp) -> tuple[list[str], list[str]]:
@@ -536,9 +575,10 @@ def compose(m, verdicts, state, filings, articles, actions, price_frame, mark) -
     action_lines, action_payload = _new_actions(actions, mark)
     legal_lines, legal_payload = _new_legal(mark)
     insider_lines, insider_payload = _new_insider(mark)
+    comm_lines, comm_payload = _new_community(mark)
 
     # 법적·내부자를 먼저 둔다. 뒤쪽 항목이 잘려도 중요한 것이 남는다.
-    extra = legal_payload + insider_payload + filing_payload + action_payload
+    extra = legal_payload + insider_payload + filing_payload + action_payload + comm_payload
 
     # **AI 브리핑을 맨 위에 둔다.** 아래 표는 근거고, 사람이 먼저 읽어야 할 것은 판단이다.
     brief = _ai_summary(fresh_articles, m, extra,
@@ -553,7 +593,7 @@ def compose(m, verdicts, state, filings, articles, actions, price_frame, mark) -
     lines += _roadmap(state) + _price(price_frame) + _covenants()
 
     new_blocks = (filing_lines + _new_articles(fresh_articles) + action_lines
-                  + legal_lines + insider_lines)
+                  + legal_lines + insider_lines + comm_lines)
     lines += ["", f"<b>🆕 지난 리포트 이후</b> ({mark.tz_convert('Asia/Seoul').strftime('%m-%d %H:%M')} 기준)"]
     lines += new_blocks if new_blocks else ["    새로 들어온 것 없음"]
 

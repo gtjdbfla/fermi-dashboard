@@ -232,7 +232,12 @@ def save_cache(articles: pd.DataFrame, chatter: pd.DataFrame) -> None:
                         .sort_values("published", ascending=False, na_position="last")
                         .head(KEEP_ARTICLES).reset_index(drop=True))
     merged.to_json(ARTICLES_CACHE, orient="records", date_format="iso", force_ascii=False)
-    chatter.to_json(COMMUNITY_CACHE, orient="records", date_format="iso", force_ascii=False)
+    # **0건이면 덮지 않는다.** Stocktwits는 서버 IP를 간헐적으로 막는다(실측 12회).
+    # 그때마다 빈 목록으로 덮어써서 30건이 통째로 사라졌다 — 로그에는 "0건 저장"이
+    # 찍히지만 그게 파괴라는 걸 읽어내기 어렵다. 기사 쪽은 이미 같은 원칙을 쓴다.
+    if not chatter.empty:
+        chatter.to_json(COMMUNITY_CACHE, orient="records", date_format="iso",
+                        force_ascii=False)
 
 
 def _load(path: Path, columns: list[str]) -> pd.DataFrame:
@@ -241,6 +246,10 @@ def _load(path: Path, columns: list[str]) -> pd.DataFrame:
     try:
         frame = pd.read_json(path, orient="records", convert_dates=["published"])
     except Exception:
+        return pd.DataFrame(columns=columns)
+    # 빈 JSON(`[]`)을 읽으면 **컬럼이 하나도 없는** 프레임이 나온다. 그대로 돌려주면
+    # 호출부의 frame["published"]가 KeyError로 터진다. 선언한 스키마를 되살린다.
+    if frame.empty:
         return pd.DataFrame(columns=columns)
     if "published" in frame.columns and not frame.empty:
         frame["published"] = pd.to_datetime(frame["published"], errors="coerce", utc=True)
