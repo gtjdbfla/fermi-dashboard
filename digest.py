@@ -248,9 +248,17 @@ def _summary_prompt(payload: str, facts: dict, state: str = "") -> str:
 {payload or "  (신규 항목 없음)"}
 
 ## 답변 형식 (한국어로 쓴다)
-- **최대 3줄.** 각 줄 `· `로 시작하는 한 문장, **한 줄 45자 이내**.
-  길면 잘라라. 읽는 사람은 출근길에 폰으로 본다.
-- 새로 알게 된 것만. 중요한 것부터. **없으면 줄 수를 줄여라.**
+- **2~5줄.** 각 줄 `· `로 시작, **한 줄 80자 이내**.
+  신규 항목이 많으면 5줄까지 쓰고, 없으면 2줄로 줄여라. 억지로 채우지 마라.
+- **위 '지난 하루 새로 들어온 것'의 항목을 빠짐없이 다뤄라.**
+  **종류가 다르면 반드시 줄을 나눈다** — 공시·애널리스트·내부자·법적·찌라시는
+  서로 다른 축이고, 근거 태그도 다르다. 한 줄에 섞으면 태그를 하나밖에 못 달아
+  나머지 출처가 사라진다. 실제로 기사와 내부자 부여를 한 줄로 묶어 "자기 돈 매수가
+  아니다"라는 핵심이 통째로 빠진 적이 있다.
+  같은 종류가 여럿일 때만 한 줄로 묶고 건수를 밝힌다.
+- 각 줄은 **사실 + 그것이 뜻하는 바** 두 부분으로 쓴다.
+  예: `· COO에게 RSU 14.7만 주 부여 — 자기 돈 매수가 아니라 보상이다 [내부자]`
+  사실만 옮기면 위 신규 목록과 같은 말이라 읽을 값어치가 없다.
 - **제목을 옮겨 적지 마라. 그 소식이 무엇을 뜻하는지를 써라.**
   기사 제목의 번역이 아니라, 위 '현재 상태'에 비춘 해석이어야 한다.
   나쁜 예: `· 내부자 거래 공시(4)가 접수되었다 [공시]`  ← 무슨 일인지 알 수 없다
@@ -267,7 +275,9 @@ def _summary_prompt(payload: str, facts: dict, state: str = "") -> str:
   바뀌었으면 바뀐 것만: `→ 판정 ① 악화` 처럼.
   **판정의 수치를 여기 옮겨 적지 마라** — 바로 아래 판정 카드에 다 있다.
   괄호로 커버리지 15%, 매출 0 같은 걸 반복하면 같은 내용이 두 번 보인다.
-- 약정 기한이 30일 이내일 때만 이 줄에 `· D-N`을 덧붙인다.
+- 약정 기한은 **30일 이내일 때만** 이 마지막 줄 끝에 `· D-N`으로 덧붙인다.
+  30일보다 멀면 아예 쓰지 마라. 아래 약정 줄에 매일 표시되므로 중복이다.
+  **D-day를 별도 줄로 만들지 말고, `[D-72]` 같은 태그도 쓰지 마라.**
 - **주가가 전일 ±5% 또는 주간 ±10%를 넘게 움직였으면 반드시 한 줄을 쓴다.**
   근거는 [주가]로 표시한다. 그리고 바스켓 대비가 '개별 요인'인지 '섹터 동행'인지
   반드시 밝혀라 — **뉴스가 없는데 개별 요인으로 크게 빠지는 것은 그 자체로 정보다.**
@@ -372,12 +382,25 @@ def _fresh_articles(articles: pd.DataFrame, mark: pd.Timestamp) -> pd.DataFrame:
     return articles[published >= mark]
 
 
+MAX_HEADLINES = 3
+
+
 def _new_articles(fresh: pd.DataFrame) -> list[str]:
-    """건수만 적는다. 내용 요약은 상단 AI 브리핑이 맡는다."""
+    """건수 + 대표 제목 몇 개. 신규 블록이 맨 위로 올라왔으므로 건수만으로는 부족하다.
+
+    계약·테넌트 분류를 먼저 보여준다 — 판정 ①을 바꿀 수 있는 유일한 부류다.
+    """
     if fresh is None or fresh.empty:
         return []
-    hits = fresh[fresh["group"] == "계약·테넌트"] if "group" in fresh.columns else fresh.head(0)
-    return [f"📰 기사 {len(fresh)}건 (계약·테넌트 {len(hits)}건)"]
+    has_group = "group" in fresh.columns
+    hits = fresh[fresh["group"] == "계약·테넌트"] if has_group else fresh.head(0)
+    lines = [f"📰 기사 {len(fresh)}건 (계약·테넌트 {len(hits)}건)"]
+    ordered = pd.concat([hits, fresh.drop(hits.index)]) if has_group and not hits.empty else fresh
+    for row in ordered.head(MAX_HEADLINES).itertuples():
+        group = getattr(row, "group", "")
+        tag = f"[{group}] " if group and group != "기타" else ""
+        lines.append(f"    · {alerts._escape(tag + str(row.title)[:74])}")
+    return lines
 
 
 # 커뮤니티 글은 대부분 잡담이다("50달러 간다", "올인했다"). 그대로 40건을 넣으면
@@ -407,6 +430,8 @@ def _new_community(mark: pd.Timestamp) -> tuple[list[str], list[str]]:
         return [], []
     picked = fresh[fresh["body"].astype(str).str.contains(_CHATTER_SUBSTANCE, na=False)]
     lines = [f"💬 커뮤니티 {len(fresh)}건 (내용 있는 글 {len(picked)}건)"]
+    for row in picked.head(2).itertuples():
+        lines.append(f"    · {alerts._escape(str(row.body)[:78])}")
     payload = []
     for row in picked.head(MAX_CHATTER).itertuples():
         when = pd.to_datetime(row.published, errors="coerce", utc=True)
@@ -580,7 +605,13 @@ def compose(m, verdicts, state, filings, articles, actions, price_frame, mark) -
     # 법적·내부자를 먼저 둔다. 뒤쪽 항목이 잘려도 중요한 것이 남는다.
     extra = legal_payload + insider_payload + filing_payload + action_payload + comm_payload
 
-    # **AI 브리핑을 맨 위에 둔다.** 아래 표는 근거고, 사람이 먼저 읽어야 할 것은 판단이다.
+    # **신규 항목을 맨 위에 둔다.** 사실을 먼저 보고 그 다음에 해석을 읽는 순서다.
+    # 판단만 위에 있으면 근거를 확인하려고 아래로 스크롤해야 했다.
+    new_blocks = (filing_lines + _new_articles(fresh_articles) + action_lines
+                  + legal_lines + insider_lines + comm_lines)
+    lines += [f"<b>🆕 지난 리포트 이후</b> ({mark.tz_convert('Asia/Seoul').strftime('%m-%d %H:%M')} 기준)"]
+    lines += (new_blocks if new_blocks else ["    새로 들어온 것 없음"]) + [""]
+
     brief = _ai_summary(fresh_articles, m, extra,
                         _state_context(verdicts, state, price_frame, m))
     if brief:
@@ -591,11 +622,6 @@ def compose(m, verdicts, state, filings, articles, actions, price_frame, mark) -
     # 다만 _state_context를 통해 AI에는 계속 넣는다 — 바뀌면 브리핑이 짚고, 전이가
     # 생기면 alerts의 레드플래그 감지기가 별도로 알린다. 화면만 덜어낸 것이다.
     lines += _roadmap(state) + _price(price_frame) + _covenants()
-
-    new_blocks = (filing_lines + _new_articles(fresh_articles) + action_lines
-                  + legal_lines + insider_lines + comm_lines)
-    lines += ["", f"<b>🆕 지난 리포트 이후</b> ({mark.tz_convert('Asia/Seoul').strftime('%m-%d %H:%M')} 기준)"]
-    lines += new_blocks if new_blocks else ["    새로 들어온 것 없음"]
 
     warn = _staleness(m, price_frame)
     if warn:
