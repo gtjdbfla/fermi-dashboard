@@ -214,6 +214,9 @@ def alert_test() -> int:
 
 
 if __name__ == "__main__":
+    import runlog
+    runlog.install()
+    runlog.banner("느린층 갱신" if "--slow" in sys.argv else "빠른층 갱신")
     if "--test-alert" in sys.argv:
         sys.exit(alert_test())
     sys.exit(main(include_market="--slow" in sys.argv))

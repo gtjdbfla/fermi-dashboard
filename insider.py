@@ -168,18 +168,25 @@ def tally(frame: pd.DataFrame | None = None) -> dict:
     }
 
 
-def by_filing(frame: pd.DataFrame | None = None) -> list[dict]:
+def by_filing(frame: pd.DataFrame | None = None, codes: set | None = None) -> list[dict]:
     """제출본 하나를 사건 하나로 묶는다.
 
     Form 4 하나에 거래 행이 여럿 들어간다 — 이틀에 걸쳐 나눠 판 건이 두 줄로 온다.
     행마다 알리면 같은 결정이 두 통이 된다.
+
+    codes로 볼 거래 코드를 정한다. 기본은 SIGNAL_CODES(P/S)로 **알림용**이다.
+    일일 리포트는 부여(A)까지 넘겨서 본다 — 알림으로 깨울 일은 아니지만
+    "어제 내부자 쪽에서 무슨 일이 있었나"에는 부여도 답에 들어가야 한다.
+    실제로 COO에게 RSU 14.7만 주가 부여된 날, 리포트에는 '내부자 거래 1건'이라는
+    건수만 뜨고 내용이 없었다.
     """
+    codes = codes or SIGNAL_CODES
     frame = transactions() if frame is None else frame
     if frame is None or frame.empty:
         return []
     out = []
     for accn, group in frame.groupby("accn", sort=False):
-        signal = group[group["code"].isin(SIGNAL_CODES)]
+        signal = group[group["code"].isin(codes)]
         if signal.empty:
             continue
         # 한 제출본에 매수와 매도가 섞이는 일은 사실상 없지만, 섞이면 각각 사건으로 낸다.

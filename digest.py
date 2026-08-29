@@ -364,11 +364,19 @@ def _new_legal(mark: pd.Timestamp) -> tuple[list[str], list[str]]:
     return lines, payload
 
 
+# 리포트는 부여(A)와 세금 원천공제(F)까지 보여준다. 알림으로 깨울 일은 아니지만
+# "어제 내부자 쪽에서 무슨 일이 있었나"에는 답이 돼야 한다. 실제로 COO에게 RSU
+# 14.7만 주가 부여된 날, 리포트에는 '내부자 거래 1건'이라는 건수만 뜨고 내용이 없었다.
+DIGEST_INSIDER_CODES = {"P", "S", "A", "F", "M"}
+_CODE_WORD = {"P": "공개시장 매수", "S": "공개시장 매도", "A": "무상 부여(보상)",
+              "F": "세금 원천공제", "M": "옵션·RSU 행사"}
+
+
 def _new_insider(mark: pd.Timestamp) -> tuple[list[str], list[str]]:
-    """내부자 공개시장 매수·매도. 부여(A)는 보상이라 넣지 않는다."""
+    """내부자 거래. 매수·매도뿐 아니라 부여도 보여주되 성격을 명시한다."""
     try:
         import insider as ins
-        actions = ins.by_filing()
+        actions = ins.by_filing(codes=DIGEST_INSIDER_CODES)
     except Exception:
         return [], []
     cut = mark.tz_localize(None).normalize()
@@ -377,15 +385,17 @@ def _new_insider(mark: pd.Timestamp) -> tuple[list[str], list[str]]:
         return [], []
     lines = [f"👤 내부자 거래 {len(fresh)}건"]
     payload = []
-    for item in fresh[:3]:
-        what = "매수" if item["code"] == "P" else "매도"
+    for item in fresh[:4]:
+        what = _CODE_WORD.get(item["code"], item["code"])
         size = f"{item['shares']:,.0f}주"
         money = f" ≈ ${item['value']/1e6:,.1f}M" if item["value"] else ""
         pct = f" (보유의 {item['share_pct']:.1f}%)" if item["share_pct"] is not None else ""
+        # 부여를 매수로 오독하는 것이 이 회사에서 실제로 일어난 일이다. 매번 못 박는다.
+        mark_word = "" if item["code"] in ("P", "S") else " — 자기 돈 매수가 아니다"
         lines.append(f"    · {item['filed']} {alerts._escape(item['person'])} "
                      f"{what} {size}{money}{pct}")
         payload.append(f"[내부자 {item['filed']}] {item['person']} ({item['roles']} "
-                       f"{item['officer_title']}) 공개시장 {what} {size}{money}{pct}")
+                       f"{item['officer_title']}) {what} {size}{money}{pct}{mark_word}")
     return lines, payload
 
 
@@ -537,4 +547,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    import runlog
+    runlog.install()
+    runlog.banner("일일 리포트")
     sys.exit(main())
