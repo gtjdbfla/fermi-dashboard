@@ -98,6 +98,24 @@ def _covenants() -> list[str]:
     return lines
 
 
+def _redflags() -> list[str]:
+    """정기보고서에 지금 서 있는 깃발. 매일 보여준다 — 사라지면 저절로 없어진다."""
+    try:
+        import redflags as rf
+        cur = rf.current()
+    except Exception:
+        return []
+    flags = cur.get("flags") or {}
+    if not flags:
+        return []
+    out = [f"🚩 <b>정기보고서 상태</b> ({alerts._escape(cur.get('filed', ''))} "
+           f"{alerts._escape(cur.get('form', ''))})"]
+    for name, v in flags.items():
+        detail = f" — {v['detail']}" if v.get("detail") else ""
+        out.append(f"    · {alerts._escape(name)}{alerts._escape(detail)}")
+    return out
+
+
 def _price(frame: pd.DataFrame) -> list[str]:
     if frame is None or frame.empty or len(frame) < 2:
         return []
@@ -465,6 +483,18 @@ def _state_context(verdicts, state, price_frame, m) -> list[str]:
                 out.append("[상태·주가맥락] " + line.strip().lstrip("· "))
     except Exception:
         pass
+    # **지금 서 있는 깃발은 매일 보여준다.** 계속기업 불확실성은 분기마다 반복 게재되는
+    # '상태'라 신규 사건이 아니고, 그래서 두 분기 연속 리포트에 한 줄도 안 나갔다.
+    # 바뀔 때만 알리되, 서 있는 동안은 매일 눈에 보여야 한다.
+    try:
+        import redflags as rf
+        cur = rf.current()
+        for name, v in (cur.get("flags") or {}).items():
+            out.append(f"[상태·레드플래그] {name}"
+                       + (f" — {v['detail']}" if v.get("detail") else "")
+                       + f" (출처 {cur.get('filed')} {cur.get('form')})")
+    except Exception:
+        pass
     try:
         import capex as cx
         v = cx.assess(m)
@@ -514,7 +544,7 @@ def compose(m, verdicts, state, filings, articles, actions, price_frame, mark) -
         lines += ["<b>🧠 오늘의 판단</b>"] + brief + [""]
 
     lines += _verdicts(verdicts) + [""]
-    lines += _roadmap(state) + _price(price_frame) + _covenants()
+    lines += _roadmap(state) + _price(price_frame) + _covenants() + _redflags()
 
     new_blocks = (filing_lines + _new_articles(fresh_articles) + action_lines
                   + legal_lines + insider_lines)

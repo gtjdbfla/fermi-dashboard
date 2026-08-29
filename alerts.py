@@ -406,6 +406,39 @@ def analyst_events(articles: pd.DataFrame) -> list[dict]:
     return events
 
 
+# ── 정기보고서 상태 (레드플래그) ──────────────────────────────────────────────
+# legal.py는 *사건*을 잡고 이건 *상태*를 잡는다. 계속기업 불확실성·내부통제 취약점은
+# 한 번 생기면 분기마다 반복 게재되고 문장에 may/could가 섞여 있어, legal.py의
+# 가정법 게이트에 걸려 통째로 버려졌다. 실제로 두 분기 연속 놓쳤다.
+#
+# 상태는 **바뀔 때만** 사건이다. 지속 중인 것은 일일 리포트의 상태 칸에만 적는다.
+REDFLAG_MAX_AGE_DAYS = 21      # 정기보고서는 분기당 1회라 창을 넉넉히 준다
+
+
+def redflag_events() -> list[dict]:
+    """정기보고서 범주 상태가 바뀐 것만. 신규·해소·변경."""
+    try:
+        import redflags as rf
+        changes = rf.transitions()
+    except Exception:
+        return []
+    events = []
+    for item in changes:
+        events.append({
+            "id": f"redflag:{item['category']}:{item['filed']}:{item['kind']}",
+            "tier": "레드플래그",
+            "kind": item["kind"],
+            "when": item["filed"],
+            "form": item["form"], "items": "", "excerpt": item.get("snippet", ""),
+            "title": item["category"],
+            "url": item["url"],
+            "detail": item.get("detail", ""),
+            "before": item.get("before", ""),
+            "why": item.get("why", ""),
+        })
+    return events
+
+
 # ── 건설 속도 ─────────────────────────────────────────────────────────────────
 # 가동 중 MW가 0인 회사에서 **건설 속도는 유일하게 관측 가능한 실적**이다. 그런데
 # 건설이 늦춰지는 것은 공시로 따로 나오지 않고 분기 현금흐름표에 숫자로만 남는다.
@@ -849,6 +882,25 @@ def compose(event: dict, m: dict) -> str:
             lines += ["", f"미충족 시: {_escape(event['consequence'])}", "",
                       "이 기한은 만기보다 먼저 온다. 테넌트를 못 잡으면 커버리지가 안 오르는 데서 "
                       "끝나지 않고 <b>상환 부담이 즉시 커진다.</b>"]
+    elif event["tier"] == "레드플래그":
+        icon = {"신규": "🚩", "해소": "🟢", "변경": "🔶"}.get(event["kind"], "🚩")
+        lines = [f"{icon} <b>정기보고서 상태 {_escape(event['kind'])} — "
+                 f"{_escape(event['title'])}</b>", "",
+                 f"{_escape(event['when'])} · {_escape(event['form'])} 원문"]
+        if event.get("detail"):
+            line = f"판정: {_escape(event['detail'])}"
+            if event.get("before"):
+                line += f"  (이전: {_escape(event['before'])})"
+            lines.append(line)
+        if event.get("excerpt"):
+            lines += ["", f"<blockquote>{_escape(event['excerpt'][:600])}</blockquote>"]
+        if event.get("why"):
+            lines += ["", f"<i>{_escape(event['why'])}</i>"]
+        if event["kind"] == "해소":
+            lines += ["", "이 항목이 <b>사라졌다.</b> 나쁜 소식만 판정을 바꾸는 게 아니다."]
+        else:
+            lines += ["", "이 문구는 회사가 <b>스스로 공시에 적은 것</b>이다. 추측이나 "
+                          "언론 해석이 아니다."]
     elif event["tier"] == "건설속도":
         v = event["capex"]
         trail = " → ".join(f"{label} ${value/1e6:,.0f}M" for label, value in v["trail"])
@@ -967,6 +1019,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
               + analyst_events(articles)
               + insider_events()
               + capex_events(m, filings)
+              + redflag_events()
               + legal_events(articles)
               + news_events(articles)
               + tenant_events())
@@ -990,6 +1043,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
                  "애널리스트": ANALYST_MAX_AGE_DAYS,
                  "내부자": INSIDER_MAX_AGE_DAYS,
                  "건설속도": CAPEX_MAX_AGE_DAYS,
+                 "레드플래그": REDFLAG_MAX_AGE_DAYS,
                  "법적": LEGAL_MAX_AGE_DAYS}.get(event["tier"], MAX_EVENT_AGE_DAYS)
         when = pd.to_datetime(event.get("when"), errors="coerce")
         if pd.notna(when) and (today - when).days > limit:
