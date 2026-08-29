@@ -175,7 +175,7 @@ def _strip_empty_tag(text: str) -> str:
     out = []
     for line in str(text or "").splitlines():
         if _NO_NEWS.search(line):
-            line = re.sub(r"\s*\[(공시|기사|애널리스트|내부자|건설|추측)\]\s*$", "", line)
+            line = re.sub(r"\s*\[(공시|기사|애널리스트|내부자|건설|주가|추측)\]\s*$", "", line)
         out.append(line)
     return "\n".join(out)
 
@@ -241,12 +241,16 @@ def _summary_prompt(payload: str, facts: dict, state: str = "") -> str:
   다른 소식과 한 문장에 묶지 마라 — 묶으면 나쁜 소식이 좋은 소식에 가려진다.
   이 줄은 3줄 상한 밖으로 따로 세어도 된다(최대 4줄).
 - **구체적인 항목을 전하는 줄에만** 근거를 붙여라 —
-  [공시] [기사] [애널리스트] [내부자] [건설] 중 하나.
+  [공시] [기사] [애널리스트] [내부자] [건설] [주가] 중 하나.
   전할 항목이 없다는 말에는 근거를 붙이지 마라. 출처가 없는 문장이기 때문이다.
 - 마지막 줄은 **판정 대조**다. 위 '현재 상태'의 판정 세 개를 근거로,
   오늘 소식이 그걸 바꾸는지 쓴다. 예: `→ 판정 ① 불변 (커버리지 15% 그대로)`
   상태에 적힌 값을 근거 없이 바꿔 말하지 마라.
 - 약정 기한이 30일 이내면 마지막 줄에 D-day를 반드시 함께 적어라.
+- **주가가 전일 ±5% 또는 주간 ±10%를 넘게 움직였으면 반드시 한 줄을 쓴다.**
+  근거는 [주가]로 표시한다. 그리고 바스켓 대비가 '개별 요인'인지 '섹터 동행'인지
+  반드시 밝혀라 — **뉴스가 없는데 개별 요인으로 크게 빠지는 것은 그 자체로 정보다.**
+  이 줄은 '새 소식 없음'일 때도 쓴다. 소식이 없는 것과 주가가 조용한 것은 다르다.
 - 새로운 내용이 없으면 두 줄만 쓴다. 첫 줄은 근거 표시 **없이**
   `· 판정을 바꿀 새 소식 없음`, 둘째 줄은 판정 대조 줄.
 
@@ -451,6 +455,16 @@ def _state_context(verdicts, state, price_frame, m) -> list[str]:
         out.append("[상태·약정] " + re.sub(r"<[^>]+>", "", line))
     for line in _price(price_frame):
         out.append("[상태·주가] " + re.sub(r"<[^>]+>", "", line))
+    # **바스켓 대비를 함께 줘야 판단이 된다.** 주가만 주면 AI가 -8.3%를 보고도
+    # 섹터 탓인지 개별 요인인지 몰라 아무 말도 못 한다. 실제로 2026-08-28에
+    # 개별 요인 -3.0%p짜리 하락이 브리핑에서 통째로 빠졌다.
+    try:
+        context = re.sub(r"<[^>]+>", "", alerts.price_context() or "")
+        for line in context.splitlines():
+            if line.strip().startswith("·"):
+                out.append("[상태·주가맥락] " + line.strip().lstrip("· "))
+    except Exception:
+        pass
     try:
         import capex as cx
         v = cx.assess(m)
