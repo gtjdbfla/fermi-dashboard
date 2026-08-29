@@ -59,7 +59,49 @@ CATEGORIES = {
         "pattern": r"putative (?:securities )?class action|securities class action",
         "why": "IPO 공시 내용에 대한 책임을 다투는 소송이다. 합의금과 경영진 시간을 잡아먹는다.",
     },
+    # ── 아래 넷은 현재 페르미에 없다. 생기면 매우 무거우므로 미리 깔아둔다. ──
+    #
+    # **전부 보일러플레이트와 싸워야 한다.** 정기보고서에는 "손상 여부를 검토한다",
+    # "재작성이 필요하게 되면", "최저 주가 요건을 못 맞추면 상장폐지될 수 있다" 같은
+    # 회계정책·위험요인 문구가 늘 실려 있다. 그래서 **실제로 벌어졌음을 말하는
+    # 표현만** 고른다 — 검토가 아니라 인식, 가능성이 아니라 통지 수령.
+    "손상차손 인식": {
+        "pattern": r"(?:recorded|recognized|incurred)\s+(?:an?\s+)?(?:non-?cash\s+)?"
+                   r"impairment\s+(?:charge|loss|expense)|"
+                   r"impairment\s+(?:charge|loss)\s+of\s+\$",
+        "why": "자산 가치를 장부에서 깎았다는 뜻이다. 무매출 개발사에서는 "
+               "'짓던 것이 계획대로 안 된다'의 회계적 표현이다.",
+    },
+    "재무제표 재작성": {
+        "pattern": r"(?:have|has|we)\s+restated\s+(?:our|the)\s+(?:previously issued\s+)?"
+                   r"(?:consolidated\s+)?financial statements|"
+                   r"restatement of (?:our|the) previously issued|"
+                   r"should no longer be relied upon",
+        "why": "이미 발표한 숫자가 틀렸다는 뜻이다. 대시보드 판정의 근거가 통째로 흔들린다.",
+    },
+    "감사인 변경": {
+        "pattern": r"dismissed\s+.{0,70}?as (?:our|its|the Company's) independent registered "
+                   r"public accounting firm|"
+                   r"(?:engaged|appointed)\s+.{0,70}?as (?:our|its|the Company's)\s+(?:new\s+)?"
+                   r"independent registered public accounting firm|"
+                   r"resign(?:ed|ation) (?:as|of) .{0,50}?independent registered public accounting",
+        "why": "회계법인이 바뀌는 것은 회계 쟁점이 있었다는 신호일 수 있다. "
+               "특히 내부통제 취약점이 이미 있는 회사에서는 무겁다.",
+    },
+    "상장규정 위반 통지": {
+        "pattern": r"received\s+(?:a\s+)?(?:written\s+)?(?:deficiency\s+)?notice\s+from\s+"
+                   r"(?:the\s+)?Nasdaq|"
+                   r"Nasdaq\s+.{0,40}?deficiency (?:letter|notice)|"
+                   r"not in compliance with\s+(?:Nasdaq\s+)?Listing Rule",
+        "why": "상장 유지 요건을 못 맞췄다는 통지다. 유예기간과 이의절차가 뒤따른다.",
+    },
 }
+
+# '아직 아니다'를 '벌어졌다'로 읽지 않기 위한 부정 표현. 문장에 이게 있으면 버린다.
+NEGATED = re.compile(
+    r"\bno impairment\b|\bnot record(?:ed)? any impairment\b|"
+    r"\bno such (?:notice|letter)\b|\bhave not (?:received|restated)\b|"
+    r"\bwe are not (?:aware|in receipt)\b", re.I)
 
 # 계속기업 불확실성 2단계 판정.
 ALLEVIATED = re.compile(
@@ -107,7 +149,10 @@ def assess(body: str) -> dict:
     """한 보고서의 범주별 상태. {범주: {"present", "count", "snippet", "detail"}}"""
     out = {}
     for name, spec in CATEGORIES.items():
-        hits = list(re.finditer(spec["pattern"], body, re.I))
+        # 부정 문장은 뺀다. "no impairment charge was recorded"가 손상 인식으로
+        # 잡히면 안 된다. 매치 주변 한 문장만 보고 판단한다.
+        hits = [m for m in re.finditer(spec["pattern"], body, re.I)
+                if not NEGATED.search(body[max(0, m.start() - 120):m.end() + 120])]
         entry = {"present": bool(hits), "count": len(hits),
                  "snippet": _snippet(body, hits[0]) if hits else "", "detail": ""}
         if name == "계속기업 불확실성" and hits:
