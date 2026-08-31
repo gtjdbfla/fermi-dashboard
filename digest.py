@@ -51,8 +51,52 @@ def since() -> pd.Timestamp:
     return mark
 
 
-def stamp() -> None:
-    dc.save_json(WATERMARK, {"at": pd.Timestamp.now(tz="UTC").isoformat()})
+def stamp(last_close: float | None = None) -> None:
+    dc.save_json(WATERMARK, {"at": pd.Timestamp.now(tz="UTC").isoformat(),
+                             "last_close": last_close})
+
+
+def last_close() -> float | None:
+    stored = dc.load_json(WATERMARK, 86400 * 30) or {}
+    value = stored.get("last_close")
+    return float(value) if value is not None else None
+
+
+# 리포트를 안 보내는 날이 있어도 된다. 다만 **며칠이고 조용하면 크론이 죽은 것과
+# 구분이 안 된다.** 아무 일이 없어도 이 간격마다 한 번은 보내 살아 있음을 알린다.
+MAX_SILENT_DAYS = 3
+
+
+def worth_sending(new_blocks: list[str], price_frame, mark: pd.Timestamp) -> tuple[bool, str]:
+    """보낼 값어치가 있는가. (보낼지, 사유)
+
+    **캘린더로 주말을 빼면 안 된다.** 일요일 밤 보도자료(M&A·파산 신청·CEO 사임)는
+    실제로 나오고, 그날은 반드시 보내야 한다. 그래서 요일이 아니라 **내용**으로 가른다.
+
+    주가가 바뀌었다는 건 그 사이 미국장이 열렸다는 뜻이다 — 캘린더를 보지 않고도
+    거래일 여부가 데이터에서 나온다. 휴장일도 저절로 처리된다.
+    """
+    if new_blocks:
+        return True, "신규 항목 있음"
+    previous = last_close()
+    current = None
+    if price_frame is not None and not price_frame.empty:
+        data = price_frame.dropna(subset=["close"])
+        if not data.empty:
+            current = float(data.iloc[-1]["close"])
+    if previous is None or (current is not None and current != previous):
+        return True, "주가 변동(거래일)"
+    try:
+        import redflags as rf
+        cut = mark.tz_localize(None).normalize()
+        if [e for e in rf.transitions() if pd.to_datetime(e["filed"]) >= cut]:
+            return True, "정기보고서 상태 전이"
+    except Exception:
+        pass
+    idle = (pd.Timestamp.now(tz="UTC") - mark).days
+    if idle >= MAX_SILENT_DAYS:
+        return True, f"{idle}일째 조용함 — 생존 확인용"
+    return False, "신규 없음 · 주가 불변(휴장)"
 
 
 def _verdicts(verdicts) -> list[str]:
@@ -590,7 +634,10 @@ def _staleness(m: dict, price_frame) -> list[str]:
     return lines
 
 
-def compose(m, verdicts, state, filings, articles, actions, price_frame, mark) -> str:
+def compose(m, verdicts, state, filings, articles, actions, price_frame, mark,
+            with_blocks: bool = False):
+    """리포트 본문. with_blocks=True면 (본문, 신규블록)을 함께 돌려준다 —
+    호출부가 '보낼 값어치가 있는지'를 판단하려면 신규 블록을 알아야 한다."""
     today = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
     lines = [f"📅 <b>페르미 일일 리포트</b> · {today}", ""]
 
@@ -628,7 +675,8 @@ def compose(m, verdicts, state, filings, articles, actions, price_frame, mark) -
         lines += [""] + warn
     if alerts.DASHBOARD_URL:
         lines.append(f'\n<a href="{alerts._escape(alerts.DASHBOARD_URL)}">대시보드</a>')
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    return (text, new_blocks) if with_blocks else text
 
 
 def main() -> int:
@@ -652,17 +700,28 @@ def main() -> int:
         m["staleness_asof"] = raw(fd.staleness_asof)()
         steps = rm.evaluate(m)
         articles = raw(nw.cached_articles)()
-        text = compose(m, sc.fermi_position(m), rm.progress(steps),
-                       raw(sec.load_filings)(), articles,
-                       an.merged_actions(articles), price_frame, mark)
+        text, new_blocks = compose(m, sc.fermi_position(m), rm.progress(steps),
+                                   raw(sec.load_filings)(), articles,
+                                   an.merged_actions(articles), price_frame, mark,
+                                   with_blocks=True)
     except Exception as error:
         print(f"[fail] 리포트 생성 실패: {type(error).__name__}: {error}")
         return 1
 
+    send_it, why = worth_sending(new_blocks, price_frame, mark)
+    if not send_it:
+        # **워터마크를 밀지 않는다.** 그래야 조용한 동안 쌓인 것이 다음 리포트에 합산된다.
+        print(f"[skip] 리포트 보류 — {why}")
+        return 0
+
     ok, error = alerts.send(text)
     if ok:
-        stamp()     # 보낸 것이 확인된 뒤에만 기준 시각을 민다
-        print("[ok] 일일 리포트 발송")
+        close = None
+        data = price_frame.dropna(subset=["close"]) if price_frame is not None else None
+        if data is not None and not data.empty:
+            close = float(data.iloc[-1]["close"])
+        stamp(close)     # 보낸 것이 확인된 뒤에만 기준 시각을 민다
+        print(f"[ok] 일일 리포트 발송 — {why}")
         return 0
     print(f"[fail] 전송 실패: {error}")
     return 1
