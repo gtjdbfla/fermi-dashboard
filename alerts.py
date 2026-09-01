@@ -443,6 +443,67 @@ def analyst_events(articles: pd.DataFrame) -> list[dict]:
     return events
 
 
+# ── 위임장·주주총회 ───────────────────────────────────────────────────────────
+# 2026-05~07 경영권 분쟁 때 위임장 공시가 **57건** 쏟아졌는데 알림은 0건이었다.
+# filing_events가 8-K의 Item 코드만 보기 때문이다 — 위임장 서식에는 items가 비어 있다.
+#
+# 2026-10-30 첫 정기주총이 잡혔고(8-K Item 5.08), 주주제안 마감이 2026-09-10이다.
+# 400MW 약정 기한(11-10)이 주총 11일 뒤라, 이사회 다툼이 서명 마감 직전에 벌어진다.
+#
+# **소음 관리가 설계의 핵심이다.** 57건을 그대로 보내면 하루 두세 통이 된다.
+# 서식을 두 갈래로 나눠 다르게 다룬다.
+#   분쟁 개시 신호(C·N 계열, 예비 위임장) — 드물고 무겁다. 서식·날짜별로 매번 알린다.
+#   권유자료 흐름(DFAN14A·DEFA14A)      — 며칠씩 연속된다. 주 1회로 묶는다.
+PROXY_FORMS = {
+    # 서식: (이름, 갈래, 매번 알릴지)
+    "DEFC14A": ("확정 경쟁 위임장", "분쟁", True),
+    "PREC14A": ("예비 경쟁 위임장", "분쟁", True),
+    "PREN14A": ("비경영진 예비 권유자료", "분쟁", True),
+    "DEFN14A": ("비경영진 확정 권유자료", "분쟁", True),
+    "DEF 14A": ("회사 확정 위임장 권유서", "회사", True),
+    "PRE 14A": ("회사 예비 위임장", "회사", True),
+    "DFAN14A": ("비경영진 권유자료", "분쟁", False),
+    "DEFA14A": ("회사 추가자료", "회사", False),
+}
+PROXY_MAX_AGE_DAYS = 14
+
+
+def proxy_events(filings: pd.DataFrame | None) -> list[dict]:
+    """위임장 공시. 분쟁 개시는 매번, 권유자료 흐름은 주 1회로 묶는다."""
+    if filings is None or filings.empty:
+        return []
+    events = []
+    for row in filings.itertuples():
+        form = str(row.form or "").upper().strip()
+        spec = PROXY_FORMS.get(form)
+        if not spec:
+            continue
+        name, side, always = spec
+        when = pd.Timestamp(row.filed)
+        if always:
+            # 서식·날짜로 묶는다. 같은 날 같은 서식이 두 번 올라와도 한 통이다.
+            key = f"{form}:{when.date()}"
+        else:
+            # 주 단위로 묶는다. 첫 건이 그 주의 알림이 되고, 다음 주에 다시 한 번.
+            iso = when.isocalendar()
+            key = f"{form}:{iso.year}-W{iso.week:02d}"
+        event_id = f"proxy:{key}"
+        if any(e["id"] == event_id for e in events):
+            continue
+        events.append({
+            "id": event_id,
+            "tier": "위임장",
+            "kind": name,
+            "side": side,
+            "when": str(when.date()),
+            "form": form, "items": "", "excerpt": "",
+            "title": str(row.title or form),
+            "url": row.url,
+            "throttled": not always,
+        })
+    return events
+
+
 # ── 정기보고서 상태 (레드플래그) ──────────────────────────────────────────────
 # legal.py는 *사건*을 잡고 이건 *상태*를 잡는다. 계속기업 불확실성·내부통제 취약점은
 # 한 번 생기면 분기마다 반복 게재되고 문장에 may/could가 섞여 있어, legal.py의
@@ -919,6 +980,22 @@ def compose(event: dict, m: dict) -> str:
             lines += ["", f"미충족 시: {_escape(event['consequence'])}", "",
                       "이 기한은 만기보다 먼저 온다. 테넌트를 못 잡으면 커버리지가 안 오르는 데서 "
                       "끝나지 않고 <b>상환 부담이 즉시 커진다.</b>"]
+    elif event["tier"] == "위임장":
+        contested = event.get("side") == "분쟁"
+        icon = "⚔️" if contested else "🗳️"
+        lines = [f"{icon} <b>위임장 — {_escape(event['kind'])}</b>", "",
+                 f"{_escape(event['when'])} · {_escape(event['form'])}",
+                 f"<i>{_escape(event['title'])}</i>"]
+        if event.get("throttled"):
+            lines.append("<i>같은 서식이 연속으로 올라오면 주 1회만 알린다.</i>")
+        if contested:
+            lines += ["", "<b>경영진이 아닌 쪽</b>이 주주를 설득하는 문서다. "
+                          "이사회 다툼이 진행 중이라는 뜻이다."]
+        else:
+            lines += ["", "회사가 주주에게 보내는 자료다. 안건과 이사 후보는 "
+                          "<b>DEF 14A</b>에 실린다."]
+        lines += ["", "2026-10-30 첫 정기주총은 <b>400MW 약정 기한(11-10) 11일 전</b>이다. "
+                      "이사회가 흔들리면 15년 리스에 서명할 테넌트가 서명을 미룬다."]
     elif event["tier"] == "레드플래그":
         icon = {"신규": "🚩", "해소": "🟢", "변경": "🔶"}.get(event["kind"], "🚩")
         lines = [f"{icon} <b>정기보고서 상태 {_escape(event['kind'])} — "
@@ -1056,6 +1133,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
               + analyst_events(articles)
               + insider_events()
               + capex_events(m, filings)
+              + proxy_events(filings)
               + redflag_events()
               + legal_events(articles)
               + news_events(articles)
@@ -1081,6 +1159,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
                  "내부자": INSIDER_MAX_AGE_DAYS,
                  "건설속도": CAPEX_MAX_AGE_DAYS,
                  "레드플래그": REDFLAG_MAX_AGE_DAYS,
+                 "위임장": PROXY_MAX_AGE_DAYS,
                  "법적": LEGAL_MAX_AGE_DAYS}.get(event["tier"], MAX_EVENT_AGE_DAYS)
         when = pd.to_datetime(event.get("when"), errors="coerce")
         if pd.notna(when) and (today - when).days > limit:
