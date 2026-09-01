@@ -185,7 +185,16 @@ def _new_filings(filings: pd.DataFrame, mark: pd.Timestamp) -> tuple[list[str], 
     """
     if filings is None or filings.empty:
         return [], []
-    fresh = filings[filings["filed"] >= mark.tz_localize(None)]
+    # **접수 시각으로 자른다.** filed는 날짜뿐이라 항상 자정이고, 리포트가 02:10 UTC에
+    # 도는 한 그날 오후 접수분은 `filed(00:00) < mark(02:10)`으로 매번 밀려난다.
+    # SEC 공시는 대부분 20~21시 UTC에 오므로 사실상 전부가 빠지고 있었다.
+    if "accepted" in filings.columns:
+        when = pd.to_datetime(filings["accepted"], errors="coerce", utc=True)
+        # 접수 시각이 없는 옛 행은 날짜라도 써서 버리지 않는다.
+        when = when.fillna(pd.to_datetime(filings["filed"], errors="coerce").dt.tz_localize("UTC"))
+        fresh = filings[when >= mark]
+    else:
+        fresh = filings[filings["filed"] >= mark.tz_localize(None)]
     if fresh.empty:
         return [], []
     counts = fresh["form"].map(_label).value_counts()

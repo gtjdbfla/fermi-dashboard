@@ -200,6 +200,12 @@ def load_filings(limit: int = 300) -> pd.DataFrame:
 
     frame = pd.DataFrame({
         "filed": pd.to_datetime(recent.get("filingDate"), errors="coerce"),
+        # **접수 시각을 따로 들고 있어야 한다.** filingDate는 날짜뿐이라 항상 자정이 되고,
+        # 정밀 시각(워터마크)과 비교하면 같은 날 오후에 접수된 공시가 통째로 밀려난다.
+        # 실제로 2026-08-31 16:15 ET 접수 8-K가 일일 리포트에서 빠졌다 —
+        # filed(08-31 00:00) < 직전 리포트 시각(08-31 02:10 UTC) 이었기 때문이다.
+        # SEC 공시는 대부분 20~21시 UTC에 오므로 사실상 전부가 그렇게 빠지고 있었다.
+        "accepted": pd.to_datetime(recent.get("acceptanceDateTime"), errors="coerce", utc=True),
         "report": pd.to_datetime(recent.get("reportDate"), errors="coerce"),
         "form": recent.get("form"),
         "title": recent.get("primaryDocDescription"),
