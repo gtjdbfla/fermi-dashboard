@@ -204,9 +204,9 @@ def _new_filings(filings: pd.DataFrame, mark: pd.Timestamp) -> tuple[list[str], 
         items = f" [{row.items}]" if getattr(row, "items", "") else ""
         if len(lines) <= 4:
             lines.append(f"    · {row.filed.date()} {row.form}{items}")
-        meaning = ", ".join(alerts.WATCHED_ITEMS[code.strip()]
-                            for code in str(getattr(row, "items", "") or "").split(",")
-                            if code.strip() in alerts.WATCHED_ITEMS)
+        # 알리지 않는 코드도 이름은 붙인다. WATCHED_ITEMS만 쓰면 5.08 같은 코드가
+        # AI에게 숫자로 가서 "8-K가 접수되었으나"로 끝난다.
+        meaning = alerts.item_names(getattr(row, "items", ""))
         payload.append(f"[공시 {row.filed.date()}] {_label(row.form)}({row.form})"
                        + (f" Item {row.items}" if getattr(row, "items", "") else "")
                        + (f" = {meaning}" if meaning else "")

@@ -49,6 +49,46 @@ def run_once(label: str, user_agent: str | None) -> bool:
     return True
 
 
+def filings_reach_digest() -> bool:
+    """**공시가 일일 리포트 창에 실제로 잡히는지** 확인한다.
+
+    이 검사가 없어서 놓친 적이 있다. load_filings의 filed는 filingDate(날짜)라 항상
+    자정인데 워터마크는 정밀 시각이라, 02:10 UTC에 도는 리포트에서
+    `filed(당일 00:00) >= 직전 리포트(당일 02:10)`가 False가 됐다. SEC 공시는 대부분
+    20~21시 UTC에 오므로 **사실상 모든 공시가 리포트에서 빠졌다.**
+    즉시 알림은 accn 기준이라 정상 동작했고, 그래서 결함이 드러나지 않았다.
+
+    가장 최근 공시를 잡아, 그 접수시각 직전을 기준선으로 삼았을 때 리포트의 신규
+    공시 블록에 반드시 나타나야 한다.
+    """
+    import pandas as pd
+    import digest as dg
+    import sec_edgar as sec
+
+    loader = getattr(sec.load_filings, "__wrapped__", sec.load_filings)
+    filings = loader()
+    if filings is None or filings.empty:
+        print("[FAIL] 공시→리포트 — 공시를 하나도 못 받았다")
+        return False
+    if "accepted" not in filings.columns:
+        print("[FAIL] 공시→리포트 — load_filings에 accepted(접수시각) 컬럼이 없다")
+        return False
+
+    row = filings.iloc[0]
+    accepted = pd.to_datetime(row["accepted"], errors="coerce", utc=True)
+    if pd.isna(accepted):
+        print("[SKIP] 공시→리포트 — 최신 공시에 접수시각이 없다")
+        return True
+    mark = accepted - pd.Timedelta(minutes=1)      # 접수 1분 전을 기준선으로
+    lines, payload = dg._new_filings(filings, mark)
+    if not payload:
+        print(f"[FAIL] 공시→리포트 — {row['form']}({row['accn']}) 접수 {accepted}가 "
+              f"창({mark} 이후)에 잡히지 않는다")
+        return False
+    print(f"[ OK ] 공시→리포트 — 최신 {row['form']}이 신규 블록에 잡힌다")
+    return True
+
+
 if __name__ == "__main__":
     original = os.environ.get("SEC_USER_AGENT")
     contact = original or "fermi-dashboard-smoke/1.0 (smoke@example.com)"
@@ -56,6 +96,10 @@ if __name__ == "__main__":
         run_once("SEC_USER_AGENT 설정됨 (운영 환경)", contact),
         run_once("SEC_USER_AGENT 미설정 (자리표시자 경로)", None),
     ]
+    os.environ["SEC_USER_AGENT"] = contact
+    for module in ("sec_edgar", "digest"):
+        sys.modules.pop(module, None)
+    results.append(filings_reach_digest())
     if original is not None:
         os.environ["SEC_USER_AGENT"] = original
     sys.exit(0 if all(results) else 1)
