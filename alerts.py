@@ -443,6 +443,68 @@ def analyst_events(articles: pd.DataFrame) -> list[dict]:
     return events
 
 
+# ── 통전(첫 전력) ─────────────────────────────────────────────────────────────
+# 세 관문(400MW·승인 고객계약·TTU NTP)은 전부 *계약*을 묻는다. "사업이 진짜
+# 진행되는가"에 물리적으로 답하는 것은 **가동 중 MW가 0을 벗어나는 순간**뿐이다.
+#
+# 확정은 state_events가 잡는다(스냅샷의 mw_operating). 다만 그 값은 power_stages.csv를
+# 사람이 고쳐야 움직이므로 며칠 늦다. 그래서 뉴스·공시 원문에서 먼저 잡는다.
+#
+# **미래형을 걸러내는 것이 전부다.** 이 회사 자료에는 "통전 예정", "연말까지 목표",
+# "6개월 내 첫 전력"이 널려 있다. 그걸 통전으로 읽으면 매주 헛알림이 난다.
+ENERGIZE_MAX_AGE_DAYS = 7
+
+
+def energize_events(articles: pd.DataFrame | None,
+                    filings: pd.DataFrame | None = None,
+                    read_text=None) -> list[dict]:
+    """실제로 통전했다고 말하는 기사·공시만."""
+    try:
+        import energize as ez
+    except Exception:
+        return []
+    events = []
+
+    if articles is not None and not articles.empty:
+        for row in articles.itertuples():
+            title = str(getattr(row, "title", "") or "")
+            if not FERMI_MARKS.search(title):
+                continue
+            if ez.from_headline(title) != "확정":
+                continue
+            key = re.sub(r"[^a-z0-9가-힣]", "", title.lower())[:70]
+            events.append({
+                "id": f"energize:news:{key}",
+                "tier": "통전", "kind": "뉴스",
+                "when": str(pd.Timestamp(row.published).date()) if pd.notna(row.published) else "",
+                "form": "", "items": "", "excerpt": "",
+                "title": title,
+                "url": getattr(row, "url", ""),
+                "source": getattr(row, "source", ""),
+                "topic": topic_key(title),
+                "확정": False,
+            })
+
+    # 공시 원문은 8-K만 본다. 정기보고서는 redflags/legal이 이미 전문을 훑는다.
+    if filings is not None and not filings.empty and read_text:
+        recent = filings[filings["form"].astype(str).str.upper().str.startswith("8-K")]
+        cutoff = pd.Timestamp.today().normalize() - pd.Timedelta(days=ENERGIZE_MAX_AGE_DAYS)
+        for row in recent[pd.to_datetime(recent["filed"]) >= cutoff].itertuples():
+            body = read_text(row.url) if row.url else ""
+            for hit in ez.from_text(body):
+                events.append({
+                    "id": f"energize:filing:{row.accn}",
+                    "tier": "통전", "kind": "공시",
+                    "when": str(pd.Timestamp(row.filed).date()),
+                    "form": row.form, "items": "", "excerpt": hit["text"],
+                    "title": "공시 원문에서 확인된 통전",
+                    "url": row.url,
+                    "확정": True,
+                })
+                break        # 공시 하나당 한 건
+    return events
+
+
 # ── 위임장·주주총회 ───────────────────────────────────────────────────────────
 # 2026-05~07 경영권 분쟁 때 위임장 공시가 **57건** 쏟아졌는데 알림은 0건이었다.
 # filing_events가 8-K의 Item 코드만 보기 때문이다 — 위임장 서식에는 items가 비어 있다.
@@ -779,6 +841,9 @@ def snapshot(m: dict, steps_done: int | None = None) -> dict:
         "revenue_q": m.get("revenue_q"),
         "op_cf_q": m.get("op_cf_q"),
         "mw_contracted": m.get("mw_contracted"),
+        # **가동 중 MW가 0을 벗어나는 순간이 이 회사에서 가장 단단한 사건이다.**
+        # 계약은 약속이고 이건 실물이다. 여태 스냅샷에 없어 감시되지 않았다.
+        "mw_operating": m.get("mw_operating"),
         "customer_count": m.get("customer_count"),
         "steps_done": steps_done,
     }
@@ -794,6 +859,13 @@ def state_events(current: dict, previous: dict) -> list[dict]:
     if not previous:
         return []
     events = []
+
+    if _crossed_up(previous.get("mw_operating"), current.get("mw_operating")):
+        events.append({"id": f"state:energize:{current['asof']}", "kind": "첫 통전 — 가동 MW 0 이탈",
+                       "detail": f"가동 중 발전 용량 {(current['mw_operating'] or 0):,.0f} MW. "
+                                 f"로드맵 3단계. **여태 모든 지표가 약속이었고 여기서부터 "
+                                 f"실물이다.** Xcel SPS 전력공급계약은 86MW를 2026년 하반기 "
+                                 f"통전 목표로 했다."})
 
     if _crossed_up(previous.get("revenue_q"), current.get("revenue_q")):
         events.append({"id": f"state:revenue:{current['asof']}", "kind": "첫 매출 인식",
@@ -980,6 +1052,23 @@ def compose(event: dict, m: dict) -> str:
             lines += ["", f"미충족 시: {_escape(event['consequence'])}", "",
                       "이 기한은 만기보다 먼저 온다. 테넌트를 못 잡으면 커버리지가 안 오르는 데서 "
                       "끝나지 않고 <b>상환 부담이 즉시 커진다.</b>"]
+    elif event["tier"] == "통전":
+        confirmed = event.get("확정")
+        lines = [f"⚡ <b>첫 전력 — {'공시 확정' if confirmed else '뉴스'}</b>", "",
+                 f"{_escape(event['when'])} · "
+                 f"{_escape(event['form'] or event.get('source', ''))}"]
+        if confirmed:
+            lines += ["", f"<blockquote>{_escape(event['excerpt'])}</blockquote>"]
+        else:
+            lines.append(f"<i>{_escape(event['title'])}</i>")
+        lines += ["", "<b>여태 모든 지표가 약속이었고 여기서부터 실물이다.</b> "
+                      "가동 중 MW가 0을 벗어나면 로드맵 3단계이고, 판정 ③(영업현금흐름)이 "
+                      "처음으로 계산 가능해진다.", "",
+                  "Xcel SPS 전력공급계약은 <b>86MW를 2026년 하반기 통전</b>, 연말까지 "
+                  "추가 114MW를 목표로 했다. 이 알림이 그 일정의 실물 확인이다."]
+        if not confirmed:
+            lines += ["", "<i>미래형(예정·목표)은 걸러냈지만, 공시로 확정되기 전까지는 "
+                          "보도로 취급한다.</i>"]
     elif event["tier"] == "위임장":
         contested = event.get("side") == "분쟁"
         icon = "⚔️" if contested else "🗳️"
@@ -1134,6 +1223,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
               + insider_events()
               + capex_events(m, filings)
               + proxy_events(filings)
+              + energize_events(articles, filings, read_text)
               + redflag_events()
               + legal_events(articles)
               + news_events(articles)
@@ -1160,6 +1250,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
                  "건설속도": CAPEX_MAX_AGE_DAYS,
                  "레드플래그": REDFLAG_MAX_AGE_DAYS,
                  "위임장": PROXY_MAX_AGE_DAYS,
+                 "통전": ENERGIZE_MAX_AGE_DAYS,
                  "법적": LEGAL_MAX_AGE_DAYS}.get(event["tier"], MAX_EVENT_AGE_DAYS)
         when = pd.to_datetime(event.get("when"), errors="coerce")
         if pd.notna(when) and (today - when).days > limit:
