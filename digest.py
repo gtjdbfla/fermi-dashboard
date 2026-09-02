@@ -139,6 +139,12 @@ def _covenants() -> list[str]:
         mark = "🔴" if left <= 14 else ("🟡" if left <= 60 else "⏳")
         lines.append(f"{mark} 약정 D-{left} ({pd.Timestamp(row['deadline']).date()}) — "
                      f"{alerts._escape(str(row['condition'])[:44])}")
+        # **결과를 함께 보여준다.** 조건만 44자로 자르면 "notice to proceed 수령"까지만
+        # 보이고 "못 받으면 지상권이 해지된다"는 알맹이가 사라진다. 조건보다 결과가
+        # 무겁다 — 상환 두 배인지 땅을 잃는지가 판단을 가른다.
+        why = str(row.get("consequence") or "").split(".")[0].strip()
+        if why:
+            lines.append(f"      ↳ {alerts._escape(why[:56])}")
     return lines
 
 

@@ -1,3 +1,4 @@
 deadline,facility,condition,consequence,threshold_mw,source
 2026-11-10,Turbine Warehouse 장비금융(MUFG),1단계 Project Matador 400MW 이상 리스·오프테이크 계약 서명,미서명 시 분기 최소상환이 잔액의 5%에서 10%로 두 배가 되고 관리대리인이 담보 터빈을 매수자에게 마케팅하기 시작할 수 있다(채무불이행 없으면 매각·담보권 실행은 불가),400,10-Q 2026 Q2 Note 5
 2026-12-31,High Voltage 장비금융(Keystone),승인된 고객계약(approved customer agreement) 수령,미수령 시 의무 조기상환 발동,,10-Q 2026 Q2 Note 5
+2026-12-31,TTU 지상권 리스(Texas Tech University System),TTU로부터 notice to proceed 수령 — 1단계 건설 자금조달 확보 + 최소 200MW 테넌트 서브리스(TensorWave 222MW로 충족) + 에스크로 9.0백만달러 납입,"미수령 시 TTU가 99년 지상권 리스를 해지할 수 있다. Carson County 약 4,523에이커 부지를 잃으면 프로젝트가 성립하지 않는다. 수직 건설도 NTP 이전에는 시작할 수 없다",,10-Q 2026 Q2 Note 6 Leases
