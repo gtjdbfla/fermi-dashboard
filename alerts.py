@@ -93,6 +93,10 @@ WATCHED_ITEMS = {
     "1.03": "파산·법정관리",
     "2.04": "기한이익상실·조기상환 의무 발생",
     "2.06": "손상차손 인식",
+    # 프로젝트 파이낸싱은 2.03(채무 발생)으로 온다. 희석은 3.02(미등록 지분 매각)다.
+    # 둘 다 투자 가설 사슬의 고리인데 감시 밖이었다.
+    "2.03": "채무·의무 발생(프로젝트 파이낸싱·차입)",
+    "3.02": "미등록 지분 매각(희석)",
 }
 
 # **알림 여부와 '뜻을 아는 것'은 다른 문제다.** WATCHED_ITEMS는 알릴 코드만 담는데,
@@ -440,6 +444,49 @@ def analyst_events(articles: pd.DataFrame) -> list[dict]:
             "이전": row.get("이전", "–"), "이유": row.get("언급된 이유", "–"),
             "출처": row.get("출처", ""),
         })
+    return events
+
+
+# ── 투자 가설 사슬 (백스톱 → PF → 계약 실행 → 건설) ───────────────────────────
+# news_events는 '서명 동사 + MW 명사'를, legal.py는 사건어를 요구한다. 그런데 이
+# 사슬의 어휘에는 둘 다 없다 — backstop, project financing, notice to proceed,
+# equity line. 실측하면 이 사슬의 제목 13개 중 **1개만** 걸렸다.
+#
+# 방향(진전·지연·후퇴)을 함께 판정한다. 같은 항목이라도 "확보"와 "무산"은 다른
+# 정보이고, 특히 **지연과 후퇴를 구분하는 것**이 대응을 가른다.
+MILESTONE_MAX_AGE_DAYS = 3
+
+
+def milestone_events(articles: pd.DataFrame | None) -> list[dict]:
+    """가설 사슬의 고리가 움직였다고 말하는 기사."""
+    if articles is None or articles.empty:
+        return []
+    try:
+        import milestone as ms
+    except Exception:
+        return []
+    events = []
+    for row in articles.itertuples():
+        title = str(getattr(row, "title", "") or "")
+        if not FERMI_MARKS.search(title):
+            continue
+        for hit in ms.classify(title):
+            if hit["direction"] == "중립":
+                continue      # 고리는 맞지만 움직였다는 말이 없다
+            key = re.sub(r"[^a-z0-9가-힣]", "", title.lower())[:60]
+            events.append({
+                "id": f"milestone:{hit['link']}:{key}",
+                "tier": "가설사슬",
+                "kind": hit["link"],
+                "direction": hit["direction"],
+                "when": str(pd.Timestamp(row.published).date()) if pd.notna(row.published) else "",
+                "form": "", "items": "", "excerpt": "",
+                "title": title,
+                "url": getattr(row, "url", ""),
+                "source": getattr(row, "source", ""),
+                "topic": topic_key(title),
+                "why": hit["why"],
+            })
     return events
 
 
@@ -1052,6 +1099,22 @@ def compose(event: dict, m: dict) -> str:
             lines += ["", f"미충족 시: {_escape(event['consequence'])}", "",
                       "이 기한은 만기보다 먼저 온다. 테넌트를 못 잡으면 커버리지가 안 오르는 데서 "
                       "끝나지 않고 <b>상환 부담이 즉시 커진다.</b>"]
+    elif event["tier"] == "가설사슬":
+        icon = {"진전": "🟢", "지연": "🟡", "후퇴": "🔴",
+                "발생": "🟠"}.get(event["direction"], "⚪")
+        lines = [f"{icon} <b>{_escape(event['kind'])} — {_escape(event['direction'])}</b>", "",
+                 f"{_escape(event['when'])} · {_escape(event.get('source', ''))}",
+                 f"<i>{_escape(event['title'])}</i>", "",
+                 f"<b>왜 중요한가</b>\n{_escape(event.get('why', ''))}"]
+        if event["direction"] == "지연":
+            lines += ["", "<b>지연은 후퇴가 아니다.</b> 회사가 진행 상황을 구체적으로 "
+                          "설명하면 정상 범위이고, 같은 말만 반복되면 그때부터 "
+                          "실행 리스크로 본다."]
+        elif event["direction"] == "후퇴":
+            lines += ["", "<b>이건 지연이 아니라 조건이 나빠진 것이다.</b> "
+                          "가설의 확률을 낮춰야 하는 종류의 소식이다."]
+        lines += ["", "사슬: 백스톱 → 프로젝트 파이낸싱 → 테넌트 계약 실행 → 건설. "
+                      "하나가 막히면 뒤가 전부 막힌다."]
     elif event["tier"] == "통전":
         confirmed = event.get("확정")
         lines = [f"⚡ <b>첫 전력 — {'공시 확정' if confirmed else '뉴스'}</b>", "",
@@ -1224,6 +1287,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
               + capex_events(m, filings)
               + proxy_events(filings)
               + energize_events(articles, filings, read_text)
+              + milestone_events(articles)
               + redflag_events()
               + legal_events(articles)
               + news_events(articles)
@@ -1251,6 +1315,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
                  "레드플래그": REDFLAG_MAX_AGE_DAYS,
                  "위임장": PROXY_MAX_AGE_DAYS,
                  "통전": ENERGIZE_MAX_AGE_DAYS,
+                 "가설사슬": MILESTONE_MAX_AGE_DAYS,
                  "법적": LEGAL_MAX_AGE_DAYS}.get(event["tier"], MAX_EVENT_AGE_DAYS)
         when = pd.to_datetime(event.get("when"), errors="coerce")
         if pd.notna(when) and (today - when).days > limit:
