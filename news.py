@@ -92,16 +92,37 @@ def _frame(records: list[dict]) -> pd.DataFrame:
 
 @st.cache_data(ttl=900, show_spinner=False)
 def google_news() -> pd.DataFrame:
-    """Google 뉴스 RSS. 티커와 회사명 두 갈래로 찾아야 지역지·업계지까지 걸린다."""
+    """Google 뉴스 RSS. 티커와 회사명 두 갈래로 찾아야 지역지·업계지까지 걸린다.
+
+    **쿼리 하나가 실패해도 조용히 절반이 된다.** 예전에는 `except: continue`로
+    넘겨서 로그에 아무것도 안 남았다. 실측하면 208건이던 수집이 105건, 32건으로
+    떨어지는데 원인이 안 보였다 — 구글이 간헐적으로 막는 것이었다.
+    이제 실패를 기록하고 한 번 더 시도한다.
+    """
+    import time as _time
     queries = ['Fermi America FRMI', '"Fermi Inc" OR "Fermi America" data center power']
     records = []
-    for query in queries:
-        try:
-            response = requests.get("https://news.google.com/rss/search",
-                                    params={"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
-                                    headers=UA, timeout=TIMEOUT)
-            root = ElementTree.fromstring(response.content)
-        except Exception:
+    failed = 0
+    for index, query in enumerate(queries):
+        if index:
+            _time.sleep(1.0)      # 연속 호출이 차단을 부른다. 사이를 띄운다.
+        root = None
+        for attempt in (1, 2):
+            try:
+                response = requests.get(
+                    "https://news.google.com/rss/search",
+                    params={"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+                    headers=UA, timeout=TIMEOUT)
+                root = ElementTree.fromstring(response.content)
+                break
+            except Exception as error:
+                if attempt == 2:
+                    failed += 1
+                    print(f"[warn] 구글 뉴스 쿼리 실패({query[:28]}…): "
+                          f"{type(error).__name__}")
+                else:
+                    _time.sleep(2.0)
+        if root is None:
             continue
         for item in root.findall(".//item"):
             title = html.unescape(item.findtext("title") or "")
@@ -112,6 +133,12 @@ def google_news() -> pd.DataFrame:
             records.append({"published": pd.to_datetime(item.findtext("pubDate"), errors="coerce", utc=True),
                             "title": title.strip(), "source": source.strip() or "Google News",
                             "url": item.findtext("link") or ""})
+    # 쿼리 몇 개가 죽었는지 남긴다. 총 건수만 보면 '절반 실패'가 정상으로 보인다.
+    try:
+        import diskcache as _dc
+        _dc.record_health("뉴스/Google 쿼리성공", len(queries) - failed)
+    except Exception:
+        pass
     return _frame(records)
 
 
