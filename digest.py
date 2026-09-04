@@ -208,15 +208,27 @@ def _new_filings(filings: pd.DataFrame, mark: pd.Timestamp) -> tuple[list[str], 
     payload = []
     for row in fresh.itertuples():
         items = f" [{row.items}]" if getattr(row, "items", "") else ""
+        # Form 3·4는 서식 번호만으로는 아무 내용이 없다. 누구인지가 곧 내용이다.
+        try:
+            import insider as ins
+            person = ins.describe(getattr(row, "accn", ""), getattr(row, "url", ""), row.form)
+        except Exception:
+            person = ""
+        who = f" — {person}" if person else ""
         if len(lines) <= 4:
-            lines.append(f"    · {row.filed.date()} {row.form}{items}")
+            lines.append(f"    · {row.filed.date()} {row.form}{items}{who}")
         # 알리지 않는 코드도 이름은 붙인다. WATCHED_ITEMS만 쓰면 5.08 같은 코드가
         # AI에게 숫자로 가서 "8-K가 접수되었으나"로 끝난다.
         meaning = alerts.item_names(getattr(row, "items", ""))
+        # title은 비어 있으면 서식 번호로 채워진다. 그대로 붙이면 "…최초신고(3) — 3"이 된다.
+        title = str(getattr(row, "title", "") or "").strip()
+        if title == str(row.form).strip():
+            title = ""
         payload.append(f"[공시 {row.filed.date()}] {_label(row.form)}({row.form})"
                        + (f" Item {row.items}" if getattr(row, "items", "") else "")
                        + (f" = {meaning}" if meaning else "")
-                       + (f" — {str(row.title)[:70]}" if getattr(row, "title", None) else ""))
+                       + who
+                       + (f" — {title[:70]}" if title else ""))
     return lines, payload
 
 
@@ -346,6 +358,10 @@ def _summary_prompt(payload: str, facts: dict, state: str = "") -> str:
   근거는 [주가]로 표시한다. 그리고 바스켓 대비가 '개별 요인'인지 '섹터 동행'인지
   반드시 밝혀라 — **뉴스가 없는데 개별 요인으로 크게 빠지는 것은 그 자체로 정보다.**
   이 줄은 '새 소식 없음'일 때도 쓴다. 소식이 없는 것과 주가가 조용한 것은 다르다.
+- **주가 등락률과 바스켓 판정은 같은 기간끼리만 이어라.** `[상태·주가맥락]`은
+  '전일'과 '주간' 두 줄로 오고 각 줄이 자기 기간의 판정을 달고 있다. 주간 등락률에
+  전일 판정을 붙이는 문장(예: "주간 10% 하락했으나 섹터 동행")은 **사실이 아니다.**
+  기간을 말할 때는 그 기간의 줄만 근거로 삼아라.
 - 새로운 내용이 없으면 두 줄만 쓴다. 첫 줄은 근거 표시 **없이**
   `· 판정을 바꿀 새 소식 없음`, 둘째 줄은 판정 대조 줄.
 

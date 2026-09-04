@@ -97,6 +97,11 @@ WATCHED_ITEMS = {
     # 둘 다 투자 가설 사슬의 고리인데 감시 밖이었다.
     "2.03": "채무·의무 발생(프로젝트 파이낸싱·차입)",
     "3.02": "미등록 지분 매각(희석)",
+    # **이 회사에서 가장 자주 오는 항목인데 감시 밖이었다.** 2026년에만 9건이다 —
+    # 7월에 법무·CCO·COO·CFO 4명을 한꺼번에 앉혔고, 8월 CEO는 "후임이 정해질 때까지"
+    # 라는 임시 조건이며, 7월에는 창업자 지명이사가 장부 열람 거부를 이유로 사임하고
+    # 회사 해명에 반박 서한까지 붙였다. 400MW를 서명할 사람이 누구인지가 곧 가설이다.
+    "5.02": "임원·이사 변동",
 }
 
 # **알림 여부와 '뜻을 아는 것'은 다른 문제다.** WATCHED_ITEMS는 알릴 코드만 담는데,
@@ -976,6 +981,29 @@ def compose_state(events: list[dict], m: dict, verdicts: list[dict]) -> str:
 # 알림에 주가만 적으면 그게 이 소식 때문인지 시장 전체가 빠진 건지 알 수 없다.
 # AI 인프라 바스켓(CORZ CRWV SMR OKLO APLD NBIS)과 견줘 개별 요인인지 동행인지 가른다.
 BASKET_GAP = 3.0        # 이 %p 넘게 벌어지면 개별 요인으로 본다
+# 주간은 5거래일치 변동이 쌓이므로 하루와 같은 문턱을 쓰면 소음이 다 '개별 요인'이 된다.
+# 대략 √5 ≈ 2.2배가 이론값이지만 그러면 6.7%p라 실제 이탈을 놓친다. 5.0으로 잡는다.
+BASKET_GAP_WEEK = 5.0
+# (이름, 비교할 봉 수, 문턱). 봉 수는 '기준봉 포함'이라 주간은 5거래일 = 6봉이다.
+HORIZONS = (("전일", 2, BASKET_GAP), ("주간", 6, BASKET_GAP_WEEK))
+
+
+def _basket_gap(basket: pd.DataFrame, sessions: int):
+    """(FRMI 변동률, 피어 평균 변동률). 둘 다 **같은 프레임·같은 날짜**에서 뽑는다.
+
+    페르미 주가를 market에서, 피어를 바스켓에서 따로 가져오면 두 축의 마지막 날짜가
+    어긋날 수 있다. 바스켓 프레임이 FRMI 컬럼을 이미 갖고 있으므로 여기서만 읽는다.
+    """
+    peers = [c for c in basket.columns if c not in ("date", "FRMI")]
+    frame = basket.dropna(subset=peers, how="all").tail(sessions)
+    if len(frame) < 2 or not peers:
+        return None
+    first, last = frame.iloc[0], frame.iloc[-1]
+    moves = [(last[t] / first[t] - 1) * 100 for t in peers
+             if pd.notna(first[t]) and pd.notna(last[t]) and first[t]]
+    if not moves or pd.isna(first["FRMI"]) or pd.isna(last["FRMI"]) or not first["FRMI"]:
+        return None
+    return (last["FRMI"] / first["FRMI"] - 1) * 100, sum(moves) / len(moves)
 
 
 def price_context() -> str:
@@ -996,23 +1024,28 @@ def price_context() -> str:
 
     # 바스켓과 비교. basket_frame은 date + 티커별 컬럼인 **wide 포맷**이다.
     # long 포맷으로 읽다가 조용히 건너뛰었다.
+    #
+    # **하루치 판정 하나만 내보내면 안 된다.** 리포트에는 주간 등락률이 함께 실리는데
+    # 대비는 전일치뿐이라, AI가 "주간 10.8% 하락했으나 섹터 동행"이라고 두 기간을
+    # 인과로 이어붙였다. 실제 그 주 바스켓은 -0.9%, FRMI는 -13.4%로 완전한 개별 요인
+    # 이었다. 기간마다 짝을 맞춰 내보내면 이 오독이 구조적으로 불가능해진다.
     try:
         import market_flow as mf
         basket = raw(mf.basket_frame)()
-        peers = [c for c in basket.columns if c not in ("date", "FRMI")]
-        recent = basket.dropna(subset=peers, how="all").tail(2)
-        if len(recent) == 2 and peers:
-            moves = []
-            for ticker in peers:
-                before, after = recent.iloc[0][ticker], recent.iloc[1][ticker]
-                if pd.notna(before) and pd.notna(after) and before:
-                    moves.append((after / before - 1) * 100)
-            if moves:
-                peer = sum(moves) / len(moves)
-                gap = move - peer
-                verdict = (f"<b>개별 요인</b> ({gap:+.1f}%p 차이)"
-                           if abs(gap) >= BASKET_GAP else "섹터 동행")
-                line += f"\n· AI 인프라 바스켓 {peer:+.1f}% → {verdict}"
+        stamp = pd.Timestamp(basket["date"].iloc[-1]).date()
+        # 바스켓이 하루라도 뒤처져 있으면 판정을 붙이지 않고 날짜를 밝힌다.
+        note = "" if stamp == pd.Timestamp(last["date"]).date() else f" (바스켓 기준 {stamp})"
+        for label, sessions, limit in HORIZONS:
+            pair = _basket_gap(basket, sessions)
+            if pair is None:
+                continue
+            own, peer = pair
+            gap = own - peer
+            verdict = (f"<b>개별 요인</b> ({gap:+.1f}%p 차이)"
+                       if abs(gap) >= limit else "섹터 동행")
+            line += (f"\n· {label} AI 인프라 바스켓 {peer:+.1f}% vs FRMI {own:+.1f}%"
+                     f" → {verdict}{note}")
+            note = ""
     except Exception:
         pass
 

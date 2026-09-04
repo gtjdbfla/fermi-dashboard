@@ -110,6 +110,61 @@ def _parse(accn: str, url: str, filed: str) -> list[dict]:
     return rows
 
 
+WHO_CACHE = "insider_who"
+
+
+def who(accn: str, url: str) -> dict:
+    """Form 3·4 한 건에서 '누가·어떤 자리인지'만 뽑는다. 실패하면 빈 dict.
+
+    `_parse`는 거래 행이 있어야 이름을 내보낸다. 그런데 Form 3(최초신고)은 거래가
+    아니라 보유 현황이라 거래 행이 없고, 신규 선임자는 대개 보유 0이라 아예 빈
+    목록이 된다. 그래서 2026-09-03 신임 최고사업책임자 선임 신고가 리포트에 서식
+    번호 '3' 한 글자로만 나갔다 — 이름도 직책도 없이. 사람이 누구인지가 곧 내용인
+    서식에서 그건 아무것도 알리지 않은 것과 같다.
+
+    한 번 제출된 신고서의 인적사항은 바뀌지 않으므로 접수번호로 영구 캐시한다.
+    """
+    key = str(accn or "").strip()
+    store = dc.load_json(WHO_CACHE, CACHE_MAX_AGE) or {}
+    if key and key in store:
+        return store[key]
+    try:
+        body = requests.get(_xml_url(url), headers=sec._HEADERS, timeout=TIMEOUT).content
+        doc = ElementTree.fromstring(body)
+    except Exception:
+        return {}
+    roles = [label for tag, label in (("isDirector", "이사"), ("isOfficer", "임원"),
+                                      ("isTenPercentOwner", "10%주주"))
+             if _text(doc, f".//{tag}") in ("1", "true")]
+    info = {
+        "person": _text(doc, ".//rptOwnerName"),
+        "roles": " / ".join(roles),
+        "officer_title": _text(doc, ".//officerTitle"),
+        # 선임 효력일. 제출일과 벌어져 있으면 지연 신고다(Form 3은 10일 내 제출 의무).
+        "period": _text(doc, ".//periodOfReport")[:10],
+    }
+    if not info["person"]:
+        return {}
+    if key:
+        store[key] = info
+        dc.save_json(WHO_CACHE, store)
+    return info
+
+
+def describe(accn: str, url: str, form: str) -> str:
+    """'Anna Bofa · 임원 Chief Commercial Officer' 같은 한 줄. 못 읽으면 빈 문자열."""
+    if str(form or "").strip() not in ("3", "4"):
+        return ""
+    info = who(accn, url)
+    if not info:
+        return ""
+    parts = [info["person"]]
+    role = " ".join(x for x in (info.get("roles"), info.get("officer_title")) if x)
+    if role:
+        parts.append(role)
+    return " · ".join(parts)
+
+
 def transactions(filings: pd.DataFrame | None = None, refresh: bool = True) -> pd.DataFrame:
     """Form 4 거래 전체. 새 접수번호만 내려받고 나머지는 캐시에서 읽는다."""
     cached = dc.load_json(CACHE, CACHE_MAX_AGE) or {}
