@@ -190,10 +190,23 @@ def stage_matched(offset: int = FERMI_STAGE_OFFSET) -> pd.DataFrame:
         revenue = float(revenue.iloc[0]["revenue"]) if not revenue.empty and pd.notna(
             revenue.iloc[0]["revenue"]) else None
 
-        multiple = (now / then) if (then and now) else None
         years = ((now_asof - then_asof).n / 12) if (then_asof is not None and now_asof is not None) else None
+        # **기간이 0이면 수익률은 '0%'가 아니라 '아직 없다'이다.** T0가 올해로 잡히는
+        # 기업은 시작점과 현재가 같은 달이라 multiple이 1.0으로 떨어지고, 그대로 두면
+        # 화면에 "총수익률 0.0%"가 측정 결과처럼 뜬다. 실제로 OKLO가 그랬다 — T0가
+        # 2026년이라 관측 창의 길이가 0인데 수익률이 0%로 보였다.
+        measurable = years is not None and years > 0
+        multiple = (now / then) if (then and now and measurable) else None
         cagr = ((multiple ** (1 / years) - 1) * 100) if (
             multiple and multiple > 0 and years and years > 0) else None
+        # profile은 pandas Series라 빈 칸이 None이 아니라 NaN으로 온다. **NaN은 truthy라서**
+        # `not profile.get(...)`로 검사하면 항상 '사유가 있다'로 판정된다.
+        reason = profile.get("price_gap_reason") if hasattr(profile, "get") else None
+        if isinstance(reason, float) and pd.isna(reason):
+            reason = None
+        if reason is None and not measurable and then and now:
+            reason = (f"T0가 {matched_year}년이라 비교 구간의 길이가 아직 0이다"
+                      f"({then_asof} 시작). 결과가 나오기 전이지 수익률이 0인 것이 아니다.")
 
         rows.append({
             "ticker": ticker, "company": item["company"], "group": str(item["group"]),
@@ -205,7 +218,7 @@ def stage_matched(offset: int = FERMI_STAGE_OFFSET) -> pd.DataFrame:
             "years_held": round(years, 1) if years else None,
             "total_return_pct": (multiple - 1) * 100 if multiple else None,
             "cagr_pct": cagr,
-            "gap_reason": profile.get("price_gap_reason") if hasattr(profile, "get") else None,
+            "gap_reason": reason,
         })
     frame = pd.DataFrame(rows)
     frame["group"] = pd.Categorical(frame["group"], categories=GROUP_ORDER, ordered=True)

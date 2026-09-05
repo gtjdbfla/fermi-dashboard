@@ -30,7 +30,11 @@ RATE = "filing_notes_rate"
 MIN_INTERVAL = float(os.environ.get("FILING_NOTES_INTERVAL", 1800))
 # 뉴스 정리·애널리스트 정리·일일 리포트가 같은 키를 쓴다. 과거분 채우기가 그것들을
 # 굶기면 안 되므로, 오늘 총 호출이 이 수를 넘으면 쉰다.
-DAILY_BUDGET = int(os.environ.get("FILING_NOTES_BUDGET", 12))
+#
+# **12는 근거 없이 보수적이었다.** "무료 등급은 하루 20회"라는 기록이 flash 기준인데
+# 주 모델을 flash-lite로 바꾼 뒤로도 그 숫자를 그대로 썼다. 2026-09-05에 연속 48회를
+# 429 없이 통과시켜 확인했다(121건 전량 생성). 한도는 그보다 훨씬 위에 있다.
+DAILY_BUDGET = int(os.environ.get("FILING_NOTES_BUDGET", 60))
 # 한 번 호출에 묶을 공시 수. 늘릴수록 빨리 채워지지만 건당 원문을 짧게 잘라야 한다.
 BATCH = 4
 
