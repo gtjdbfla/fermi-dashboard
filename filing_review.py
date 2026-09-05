@@ -24,7 +24,10 @@ import sec_edgar as sec
 CACHE_NAME = "filing_review"
 MAX_AGE = 86400 * 30
 MAX_FILINGS = 6
-MAX_CHARS = 12000
+# 12,000자는 모델 한계가 아니라 우리가 정한 상한이었다. 8-K는 대개 6천 자 안쪽이라
+# 문제가 없었지만, 첨부(EX-10.1 계약 원문)가 붙으면 정작 조건이 적힌 뒷부분이 잘렸다.
+# 여기서 읽는 것은 최대 6건이라 올려도 부담이 없다.
+MAX_CHARS = 150_000
 
 # 계약·용량·자금조달을 바꿀 수 있는 서식만 읽는다. 10-Q/10-K는 XBRL이 자동 반영한다.
 WATCHED = ("8-K", "S-1", "S-3", "424B", "SC 13D", "SCHEDULE 13D", "DEF 14A", "DEFA14A",
