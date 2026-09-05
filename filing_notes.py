@@ -229,7 +229,11 @@ def run(filings: pd.DataFrame | None = None, limit: int = BATCH,
 
     dc.save_json(RATE, {"at": pd.Timestamp.now(tz="UTC").isoformat()})
     import ai_review
-    text, error = ai_review.generate(_prompt(items))
+    # **여기만 등급을 나눈다.** 8-K 한 건을 옮겨 적는 일은 사실 전사에 가까워 기본
+    # 모델로 충분하고 건수가 100건 넘게 돈다. 반면 정기보고서는 30만~60만 자에서
+    # 계속기업·유동성·소송을 골라내는 일이라 상위 모델을 쓴다.
+    text, error = ai_review.generate(_prompt(items),
+                                     ai_review.DEEP_MODEL if big else None)
     if error:
         return {"made": 0, "left": int(len(pending)), "error": error}
 

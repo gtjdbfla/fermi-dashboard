@@ -864,7 +864,8 @@ def review(key: str, text_payload: str, facts: dict, force: bool = False) -> tup
     if wait:
         return cached.get("text", ""), f"호출 간격 제한 — {wait/60:.0f}분 뒤 재시도"
     ai_review._mark(RATE_CACHE)
-    text, error = ai_review.generate(_prompt(text_payload, facts))
+    # 애널리스트 전제가 공시된 사실과 어긋나는 곳을 짚는 일이라 대조가 필요하다.
+    text, error = ai_review.generate(_prompt(text_payload, facts), ai_review.DEEP_MODEL)
     if error:
         return cached.get("text", ""), error
     if text:

@@ -135,7 +135,9 @@ def run(m: dict, reviewed_through, force: bool = False) -> dict:
         "debt": f"${(m.get('debt_proforma') or 0)/1e6:,.0f}M",
     }
     import ai_review
-    text, error = ai_review.generate(_prompt("\n\n".join(payload), facts))
+    # 대시보드의 확정 수치를 바꿔야 하는지 판정하는 자리다. 여기가 틀리면 숫자가 틀어진다.
+    text, error = ai_review.generate(_prompt("\n\n".join(payload), facts),
+                                     ai_review.DEEP_MODEL)
     if error:
         return {"count": len(frame), "fingerprint": key, "text": "", "error": error}
 

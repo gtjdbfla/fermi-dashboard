@@ -434,7 +434,9 @@ def _ai_summary(fresh: pd.DataFrame, m: dict, extra: list[str] | None = None,
         "revenue": usd(m.get("revenue_q")), "op_cf": usd(m.get("op_cf_q")),
     }
     prompt = _summary_prompt("\n".join(payload), facts, "\n".join(state_lines))
-    text, error = ai_review.generate(prompt)
+    # 오늘의 판단은 12개 감시 축을 놓고 무엇이 판정을 흔드는지 고르는 일이다.
+    # 이 대시보드에서 추론이 가장 깊게 필요한 자리라 상위 모델을 쓴다.
+    text, error = ai_review.generate(prompt, ai_review.DEEP_MODEL)
 
     # **프롬프트만 믿으면 조용히 되돌아간다.** 실제로 영어 브리핑이 며칠 나갔다 —
     # "이름은 원문 철자 그대로" 규칙이 과확장되어 문장까지 영어로 유지한 탓이었다.
@@ -443,7 +445,8 @@ def _ai_summary(fresh: pd.DataFrame, m: dict, extra: list[str] | None = None,
         print("[warn] 브리핑이 한국어가 아니다 — 재시도")
         retry, retry_error = ai_review.generate(
             prompt + "\n\n## 재작성 지시\n직전 답변이 영어였다. **모든 문장을 한국어로**"
-                     " 다시 써라. 고유명사와 금액만 원문으로 두고 서술어는 전부 한국어다.")
+                     " 다시 써라. 고유명사와 금액만 원문으로 두고 서술어는 전부 한국어다.",
+            ai_review.DEEP_MODEL)      # 재시도도 같은 등급으로 — 등급이 내려가면 원인이 섞인다
         if retry and _mostly_korean(retry):
             text = retry
         elif retry:

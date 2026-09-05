@@ -148,6 +148,16 @@ def _prompt(payload: str, facts: dict) -> str:
 FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-flash-lite-latest")
 USAGE_CACHE = "ai_usage"
 
+# 판단이 필요한 자리에만 쓰는 상위 모델.
+#
+# 주 모델 flash-lite는 최하위 등급이다. 사실을 옮기는 일(공시 건별 요약처럼 100건 넘게
+# 도는 것)에는 충분하지만, 여러 축을 놓고 무엇이 판정을 흔드는지 고르는 일에는 얇다.
+# 한도가 모델별로 따로 잡히므로 갈라 쓰면 서로 굶기지도 않는다.
+#
+# **느린 것은 문제가 되지 않는다.** 이 분석들은 전부 크론이 정해진 시각에 돌리는 것이지
+# 사람이 화면에서 기다리는 것이 아니다(flash 12.3초 / flash-lite 4.4초, 2026-09-05 실측).
+DEEP_MODEL = os.environ.get("GEMINI_DEEP_MODEL", "gemini-flash-latest")
+
 
 def _count(model: str) -> None:
     """오늘 몇 번 불렀는지 모델별로 센다. 한도에 얼마나 가까운지 화면에서 보여주려는 것."""
@@ -165,15 +175,23 @@ def usage() -> dict:
     return stored.get("models", {}) if stored.get("date") == today else {}
 
 
-def generate(prompt: str) -> tuple[str, str]:
-    """(본문, 오류). 주 모델이 한도를 넘기면 보조 모델로 자동 전환한다."""
+def generate(prompt: str, model: str | None = None) -> tuple[str, str]:
+    """(본문, 오류). 한도를 넘기면 다음 모델로 자동 전환한다.
+
+    `model`을 주면 그것부터 쓰고, 막히면 주 모델 → 보조 모델 순으로 내려온다. 상위
+    모델이 429여도 분석이 통째로 빠지는 것보다 한 등급 낮게라도 나오는 편이 낫다.
+    """
     from google import genai
     client = genai.Client()
+    chain = []
+    for candidate in (model, MODEL, FALLBACK_MODEL):
+        if candidate and candidate not in chain:
+            chain.append(candidate)
     last_error = ""
-    for model in [MODEL] + ([FALLBACK_MODEL] if FALLBACK_MODEL != MODEL else []):
+    for name in chain:
         try:
-            interaction = client.interactions.create(model=model, input=prompt)
-            _count(model)
+            interaction = client.interactions.create(model=name, input=prompt)
+            _count(name)
             return (interaction.output_text or "").strip(), ""
         except Exception as error:
             last_error = f"{type(error).__name__}: {error}"
@@ -222,7 +240,8 @@ def analyze(fingerprint_key: str, payload: str, facts: dict) -> tuple[str, str]:
     if wait:
         return previous, f"직전 생성 후 {wait/60:.0f}분 뒤 갱신 예정"
     _mark()
-    text, error = generate(_prompt(payload, facts))
+    # 기사와 커뮤니티 글을 [공시]/[기사]/[추측]으로 가르는 일이라 판단이 들어간다.
+    text, error = generate(_prompt(payload, facts), DEEP_MODEL)
     if error:
         return previous, error
     if text:

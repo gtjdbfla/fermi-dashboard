@@ -182,7 +182,10 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
         records.append({
             "구분": "참고", "데이터": "AI 호출(오늘)",
             "최신 시점": " · ".join(f"{k.split('/')[-1]} {v}회" for k, v in used.items()),
-            "경과": "–", "갱신 주기": f"{ai_review.MODEL} · 키 {_key_id()}",
+            # 판단용(상위)과 전사용(기본)을 갈라 쓰므로 둘 다 적는다. 어느 쪽이 한도에
+            # 걸렸는지가 보이지 않으면 품질이 조용히 내려간 걸 알아채지 못한다.
+            "경과": "–",
+            "갱신 주기": f"판단 {ai_review.DEEP_MODEL} · 전사 {ai_review.MODEL} · 키 {_key_id()}",
             "상태": "✅",
         })
 
