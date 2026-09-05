@@ -39,6 +39,7 @@ TAB_SOURCES = {
     "roadmap": ["페르미 재무제표(XBRL)", "계약·용량 수치", "공시 피드"],
     "sector": ["섹터 표본 13개사", "섹터 시가총액"],
     "flow": ["AI 인프라 바스켓", "공매도·기관·내부자", "주가"],
+    "filings": ["공시 피드", "공시 요약(AI)"],
     "news": ["뉴스·커뮤니티", "뉴스 정리(AI)", "공시 피드"],
     "analyst": ["애널리스트 컨센서스", "증권사 등급표", "애널리스트 액션", "애널리스트 정리(AI)", "주가"],
     "reference": ["페르미 재무제표(XBRL)", "공시 피드", "주가"],
@@ -127,6 +128,10 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
         dc.age_seconds("filing_review", "json"), "새 공시 있을 때 · 점검은 30분마다")
     add("30분", "뉴스 정리(AI)", None, dc.age_seconds("ai_review", "json"),
         "새 기사 있을 때 · 점검은 30분마다")
+    # 과거분을 며칠에 걸쳐 채우는 중이라 '지연'이라는 말이 어울리지 않는다. 몇 건이
+    # 쌓였는지만 보여주고 STALE_AFTER에는 넣지 않는다.
+    add("30분", "공시 요약(AI)", f"{len(dc.load_json('filing_notes', 86400 * 3650) or {})}건 누적",
+        dc.age_seconds("filing_notes", "json"), "한도 안에서 순차 생성")
     add("30분", "애널리스트 액션", None, dc.age_seconds("analyst_headlines", "frame.json"),
         "크론 30분 · 뉴스 제목에서 추출")
     add("30분", "증권사 등급표", None, dc.age_seconds("analyst_ratings", "frame.json"),

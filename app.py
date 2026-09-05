@@ -15,10 +15,13 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import ai_review
+import alerts
 import analyst as an
+import filing_notes as fn
 import filing_review as fr
 import freshness as fresh
 import fundamentals as fd
+import insider as ins
 import market
 import maturity as mt
 import market_flow as mflow
@@ -222,24 +225,13 @@ with head_right:
         )
 
 # ── 수동 데이터 노후화 ────────────────────────────────────────────────────────
+# **판독 본문은 여기 두지 않는다.** 맨 앞은 지금 무엇을 봐야 하는지 알리는 자리인데,
+# AI 판독 전문이 깔리면 정작 핵심 판정 ①②③이 화면 아래로 밀렸다. 여기서는 몇 건이
+# 밀려 있는지만 알리고, 본문과 공시 목록은 `공시` 탭으로 보낸다.
 stale = fd.staleness(m)
 if stale["count"] > 0:
     st.warning(f"**수동 데이터가 낡았을 수 있다** — {pd.Timestamp(stale['asof']).date()} 이후 "
-               f"새 공시 {stale['count']}건.", icon="🔔")
-    review = fr.cached()
-    if review.get("text"):
-        with st.container(border=True):
-            st.markdown("**🤖 공시 판독**")
-            st.markdown(clean_ai(review["text"]))
-        st.caption("서버 크론이 30분마다 새 공시를 읽어 판정한다. **CSV는 자동으로 바뀌지 않는다** — "
-                   "확정 반영은 저장소에 커밋해야 한다.")
-    elif review.get("error"):
-        st.caption(f"공시 판독 대기 — {review['error']}")
-    feed = stale["filings"].copy()
-    feed["접수일"] = feed["filed"].dt.date
-    table(feed.rename(columns={"form": "종류", "title": "제목", "url": "링크"})
-          [["접수일", "종류", "제목", "링크"]],
-          column_config={"링크": st.column_config.LinkColumn("링크", display_text="열기")})
+               f"새 공시 {stale['count']}건. 판독과 원문은 **공시** 탭에 있다.", icon="🔔")
 else:
     reviews = fd.load_csv("review_log.csv")
     last = reviews.iloc[-1] if not reviews.empty else None
@@ -266,8 +258,10 @@ for column, item in zip(st.columns(3), sc.fermi_position(m)):
 
 # 원문자는 핵심 판정 ①②③과 **같은 뜻으로만** 쓴다. 예전에는 탭 ②가 현금흐름(판정 ③)이라
 # 같은 기호가 두 곳에서 다른 걸 가리켰고, 판정 ②는 볼 화면이 아예 없었다.
+# `공시`는 `뉴스·소문` **바로 앞**에 둔다. 확정된 것을 먼저 보고 미확정을 나중에 보는
+# 순서가 이 대시보드의 원칙이고, 탭 순서도 그래야 헷갈리지 않는다.
 tabs = st.tabs(["① 계약 커버리지", "② 만기 정합", "③ 현금흐름 전환", "로드맵", "섹터 검증",
-                "시장·수급", "뉴스·소문", "애널리스트", "참고 지표", "원본 데이터"])
+                "시장·수급", "공시", "뉴스·소문", "애널리스트", "참고 지표", "원본 데이터"])
 
 # ── ① 계약 커버리지 ───────────────────────────────────────────────────────────
 with tabs[0]:
@@ -691,8 +685,119 @@ with tabs[5]:
             "Form 4를 직접 열어 확인한다."))
         table(insiders)
 
-# ── ⑥ 뉴스·소문 ───────────────────────────────────────────────────────────────
+# ── 공시 ──────────────────────────────────────────────────────────────────────
 with tabs[6]:
+    heading("지금까지 나온 공시 전부", size="####", help_text=(
+        "**이 대시보드에서 확정은 여기서만 나온다.** 계약 MW도 자금조달도 8-K를 근거로만 "
+        "갱신되고, 뉴스와 커뮤니티는 확정에 쓰지 않는다.\n\n"
+        "서버가 30분마다 EDGAR를 확인하고, 새 공시는 중요한 서식부터 AI가 한 건씩 요약해 "
+        "쌓는다. 한 번 만든 요약은 지우지 않는다 — 제출된 공시의 내용은 바뀌지 않는다.\n\n"
+        "Form 3·4(내부자)는 AI를 쓰지 않는다. 이름·직책·거래를 원본 XML에서 그대로 읽는 "
+        "편이 정확하다."
+    ))
+    st.caption(fresh.tab_line("filings", m, price_frame))
+
+    all_filings = sec.load_filings()
+    cover = fn.coverage(all_filings)
+    stored_notes = fn.notes()
+
+    metric_row([
+        ("공시 총계", f"{cover['total']:,}건",
+         f"{all_filings['filed'].min().date()} 이후 EDGAR 접수분"),
+        ("AI 요약", f"{cover['done']}/{cover['done'] + cover['todo']}건",
+         "중요한 서식부터 크론이 한도 안에서 채운다. 남은 건은 다음 실행에서 이어 만든다."),
+        ("최근 접수", str(all_filings["filed"].max().date()),
+         "SEC는 미국 동부시간 22시까지 접수를 받는다"),
+    ])
+
+    # ── 판독(앞면에서 내려온 것) ──────────────────────────────────────────────
+    review = fr.cached()
+    if review.get("text"):
+        with st.expander(f"🤖 수동 데이터 반영 판독 — 미반영 {review.get('count', 0)}건", expanded=False):
+            st.markdown(clean_ai(review["text"]))
+            st.caption("마지막 수동 반영 이후 들어온 공시만 본다. **CSV는 자동으로 바뀌지 않는다** — "
+                       "확정 반영은 저장소에 커밋해야 한다.")
+    elif review.get("error"):
+        st.caption(f"판독 대기 — {review['error']}")
+
+    # ── 거르기 ────────────────────────────────────────────────────────────────
+    groups = ["전체"] + sorted(all_filings["group"].dropna().unique().tolist())
+    pick_left, pick_mid, pick_right = st.columns([0.34, 0.34, 0.32])
+    group = pick_left.selectbox("분류", groups, index=0)
+    forms = sorted(all_filings["form"].dropna().unique().tolist())
+    form_pick = pick_mid.multiselect("서식", forms, default=[],
+                                     placeholder="전체 서식")
+    only_ai = pick_right.checkbox("AI 요약 있는 것만", value=False)
+
+    view = all_filings.copy()
+    if group != "전체":
+        view = view[view["group"] == group]
+    if form_pick:
+        view = view[view["form"].isin(form_pick)]
+    if only_ai:
+        view = view[view["accn"].astype(str).isin(stored_notes)]
+    view = view.sort_values("filed", ascending=False)
+
+    st.caption(f"{len(view):,}건 표시 · 최신순")
+
+    PAGE = 25
+    total_pages = max(1, -(-len(view) // PAGE))
+    page = 1
+    if total_pages > 1:
+        page = st.number_input(f"쪽 (1–{total_pages})", min_value=1, max_value=total_pages,
+                               value=1, step=1)
+    shown = view.iloc[(page - 1) * PAGE: page * PAGE]
+
+    for row in shown.itertuples():
+        accn = str(row.accn)
+        note_row = stored_notes.get(accn)
+        meaning = alerts.item_names(getattr(row, "items", "") or "")
+        # Form 3·4는 사람이 누구인지가 곧 내용이다. AI 대신 원본 XML에서 읽는다.
+        person = ""
+        if str(row.form).strip() in ("3", "4"):
+            try:
+                person = ins.describe(accn, row.url, row.form)
+            except Exception:
+                person = ""
+        badge = "🤖" if note_row else ("👤" if person else "·")
+        label = (f"{badge}  {row.filed.date()}  ·  {row.form}"
+                 + (f"  ·  {meaning}" if meaning else "")
+                 + (f"  ·  {person}" if person else ""))
+        with st.expander(label, expanded=False):
+            if note_row:
+                st.markdown(clean_ai(note_row["summary"]))
+                st.caption(f"AI 요약 · {str(note_row.get('at', ''))[:10]}")
+            elif person:
+                try:
+                    info = ins.who(accn, row.url)
+                except Exception:
+                    info = {}
+                st.markdown(f"**{esc(person)}**")
+                if info.get("period"):
+                    gap = (pd.Timestamp(row.filed) - pd.Timestamp(info["period"])).days
+                    st.markdown(f"- 효력일 {info['period']} → 제출 {gap}일 뒤")
+                st.caption("내부자 신고는 AI를 쓰지 않는다. 거래 내역은 **시장·수급 → 내부자 거래**에 있다.")
+            elif not fn.worth(row.form):
+                st.caption("요약 대상이 아닌 서식이다(상장 절차 통지 등). 원문을 직접 확인해라.")
+            else:
+                st.caption("아직 요약이 만들어지지 않았다. 크론이 한도 안에서 순서대로 채운다.")
+                if st.button("지금 요약 만들기", key=f"note_{accn}"):
+                    with st.spinner("공시를 읽는 중"):
+                        made = fn.summarize({"accn": accn, "filed": row.filed,
+                                             "form": row.form,
+                                             "items": getattr(row, "items", "") or "",
+                                             "url": row.url})
+                    if made["made"]:
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.warning(made.get("error") or "요약을 만들지 못했다")
+            if row.url:
+                st.markdown(f"[원문 열기]({row.url})")
+
+
+# ── ⑥ 뉴스·소문 ───────────────────────────────────────────────────────────────
+with tabs[7]:
     heading("계약 숫자를 바꿀 소식이 떴는가", size="####", help_text=(
         "**뉴스는 펀더멘탈이 아니다.** 목적은 하나 — 핵심 판정 ①(계약 커버리지 "
         f"{fd.pct(m.get('contracted_vs_landed'))})을 바꿀 소식을 먼저 알아채는 것.\n\n"
@@ -784,7 +889,7 @@ with tabs[6]:
               height=320)
 
 # ── ⑦ 애널리스트 ──────────────────────────────────────────────────────────────
-with tabs[7]:
+with tabs[8]:
     heading("애널리스트는 이 회사를 무엇으로 보고 있는가", size="####", help_text=(
         "**증권사 리포트 원문은 유료다.** 공개된 세 갈래로 같은 내용을 재구성한다 — Nasdaq "
         "컨센서스 API(목표주가·의견 분포), Nasdaq 실적 추정 API(EPS 컨센서스), 그리고 뉴스 "
@@ -905,7 +1010,7 @@ with tabs[7]:
 
 
 # ── 참고 지표 ─────────────────────────────────────────────────────────────────
-with tabs[8]:
+with tabs[9]:
     heading("판정에서 내린 항목들", size="####", help_text=(
         "섹터 검증에서 생존과 붕괴를 가르지 못한 항목이다. 지우면 맥락을 잃으므로 참고로만 남긴다. "
         "각 항목을 펼치면 왜 내렸는지가 먼저 나온다."))
@@ -988,7 +1093,7 @@ with tabs[8]:
                                          height=300), use_container_width=True)
 
 # ── 원본 데이터 ───────────────────────────────────────────────────────────────
-with tabs[9]:
+with tabs[10]:
     heading("데이터 출처", size="####", help_text=(
         "EDGAR는 현금흐름 항목을 회계연도 기초부터 누적해서 담는다. 그대로 쓰면 4분기 막대가 연간값이 "
         "되므로 `sec_edgar.periodic_series()`가 누적을 분기 구간으로 되돌린 뒤 화면에 올린다."))

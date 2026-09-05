@@ -74,6 +74,23 @@ def warm_filings(m) -> None:
         print(f"[warn] 공시 판독 실패: {type(error).__name__}: {error}")
 
 
+def warm_notes() -> None:
+    """공시 탭이 쓸 건별 요약을 조금씩 채운다.
+
+    154건을 한 번에 만들 수는 없다(무료 등급 하루 20회). 중요한 서식부터 몇 건씩,
+    하루 예산 안에서 며칠에 걸쳐 채운다. 다 채워진 뒤에는 새 공시만 따라간다.
+    """
+    try:
+        import filing_notes as fn
+        result = fn.run()
+        if result["made"]:
+            print(f"[ok] 공시 요약 {result['made']}건 생성 · 남은 {result['left']}건")
+        elif result.get("error"):
+            print(f"[skip] 공시 요약 — {result['error']}")
+    except Exception as error:
+        print(f"[warn] 공시 요약 실패: {type(error).__name__}: {error}")
+
+
 def notify(m, articles) -> None:
     """새 계약 신호가 있으면 텔레그램으로 보낸다.
 
@@ -173,6 +190,14 @@ def main(include_market: bool = False) -> int:
     notify(m, articles)
     warm_analyst(m)
 
+    code = _summarize(articles, chatter, m)
+    # **뉴스 정리 뒤에 둔다.** 과거 공시 채우기는 급하지 않은데 앞에 두면 남은 호출
+    # 예산을 먼저 먹어 그날의 정리가 굶는다.
+    warm_notes()
+    return code
+
+
+def _summarize(articles, chatter, m) -> int:
     key = ai_review.fingerprint(articles, chatter)
     if ai_review._read_cache().get(key):
         print(f"[skip] AI 정리 이미 있음 (지문 {key})")

@@ -47,14 +47,16 @@ def pending(reviewed_through) -> pd.DataFrame:
     return fresh.sort_values("filed", ascending=False).head(MAX_FILINGS)
 
 
-def _text(url: str) -> str:
+def _text(url: str, limit: int = MAX_CHARS) -> str:
+    """공시 원문을 평문으로. limit은 호출 쪽이 정한다 — 정기보고서는 계속기업 문구가
+    뒤쪽에 있어 12,000자로 자르면 통째로 놓친다(filing_notes가 더 길게 읽는다)."""
     try:
         raw = requests.get(url, headers={"User-Agent": sec.SEC_USER_AGENT}, timeout=30).text
     except Exception:
         return ""
     raw = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", raw, flags=re.S | re.I)
     raw = re.sub(r"<[^>]+>", " ", raw)
-    return re.sub(r"\s+", " ", html.unescape(raw))[:MAX_CHARS]
+    return re.sub(r"\s+", " ", html.unescape(raw))[:limit]
 
 
 def fingerprint(frame: pd.DataFrame) -> str:
