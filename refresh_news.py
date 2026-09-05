@@ -87,6 +87,15 @@ def warm_notes() -> None:
             print(f"[ok] 공시 요약 {result['made']}건 생성 · 남은 {result['left']}건")
         elif result.get("error"):
             print(f"[skip] 공시 요약 — {result['error']}")
+        # **큐를 다 비운 뒤에 종합한다.** 채우는 중에 만들면 절반만 읽고 쓴 정리가
+        # 지문까지 갱신해 버려서, 다 채워진 뒤에도 다시 만들지 않는다.
+        if result["left"] <= 0:
+            import pandas as pd
+            summary = fn.overview()
+            if summary.get("error"):
+                print(f"[skip] 공시 종합 — {summary['error'][:80]}")
+            elif summary.get("at", "")[:10] == str(pd.Timestamp.now(tz="UTC").date()):
+                print(f"[ok] 공시 종합 정리 갱신 ({len(summary['text'])}자)")
     except Exception as error:
         print(f"[warn] 공시 요약 실패: {type(error).__name__}: {error}")
 

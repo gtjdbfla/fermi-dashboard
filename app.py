@@ -710,6 +710,21 @@ with tabs[6]:
          "SEC는 미국 동부시간 22시까지 접수를 받는다"),
     ])
 
+    # ── 전체 종합 ─────────────────────────────────────────────────────────────
+    # 건별 요약은 나무를 보여주지만 숲을 보여주지 못한다. 154건을 사람이 훑어야 흐름이
+    # 보이는데, 그러라고 만든 화면이 아니다. 그래서 맨 앞에 종합을 둔다.
+    digest_all = fn.overview_cached()
+    if digest_all.get("text"):
+        with st.container(border=True):
+            st.markdown("#### 🧭 지금까지의 공시를 종합하면")
+            st.markdown(clean_ai(digest_all["text"]))
+            st.caption(f"건별 요약 {digest_all.get('count', 0)}건을 재료로 AI가 종합 · "
+                       f"{str(digest_all.get('at', ''))[:10]} 생성 · "
+                       "새 공시 요약이 늘면 다시 만든다")
+    elif cover["todo"]:
+        st.info(f"건별 요약을 채우는 중이다({cover['done']}/{cover['done'] + cover['todo']}). "
+                "다 채워지면 전체 종합이 여기에 생긴다.", icon="⏳")
+
     # ── 판독(앞면에서 내려온 것) ──────────────────────────────────────────────
     review = fr.cached()
     if review.get("text"):
