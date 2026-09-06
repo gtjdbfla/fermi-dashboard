@@ -26,6 +26,7 @@ import market
 import maturity as mt
 import market_flow as mflow
 import news as nw
+import proxy as pxy
 import roadmap as rm
 import sec_edgar as sec
 import sector as sc
@@ -724,6 +725,32 @@ with tabs[6]:
     elif cover["todo"]:
         st.info(f"건별 요약을 채우는 중이다({cover['done']}/{cover['done'] + cover['todo']}). "
                 "다 채워지면 전체 종합이 여기에 생긴다.", icon="⏳")
+
+    # ── 위임장 대결 ───────────────────────────────────────────────────────────
+    # 공시 154건 중 60건이 위임장이다. 서식 건수만 세면 대결이 살아 있는지 알 수 없어
+    # 원문에서 읽은 상태를 따로 보여준다.
+    try:
+        contest = pxy.state()
+        upcoming = pxy.calendar()
+    except Exception:
+        contest, upcoming = {"status": "없음"}, []
+    if contest.get("status") != "없음":
+        icon = {"활성": "🔴", "소강": "🟡", "휴면": "⚪"}.get(contest["status"], "⚪")
+        with st.container(border=True):
+            st.markdown(f"**{icon} 위임장 대결 — {esc(contest['status'])}** &nbsp;·&nbsp; "
+                        f"{esc(contest['label'])}")
+            bits = " · ".join(f"{k} {v}건" for k, v in contest["counts"].items())
+            st.caption(f"분쟁 갈래 서식 {bits}")
+            sig = contest.get("last_signal")
+            if sig:
+                st.markdown(f"마지막 신호 — **{esc(sig['signal'])}** "
+                            f"({sig['filed']} · {esc(sig['author'])} 자료)")
+                st.caption(f"“{esc(sig['excerpt'])}”")
+                if sig["author"] == "분쟁측":
+                    st.caption("⚠️ 분쟁측이 쓴 문장이다. 한쪽의 주장이지 확인된 사실이 아니다.")
+            if upcoming:
+                st.markdown(" · ".join(
+                    f"**D-{u['days']}** {u['date']} {esc(u['what'])}" for u in upcoming))
 
     # ── 판독(앞면에서 내려온 것) ──────────────────────────────────────────────
     review = fr.cached()

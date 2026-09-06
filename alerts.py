@@ -618,6 +618,42 @@ def proxy_events(filings: pd.DataFrame | None) -> list[dict]:
     return events
 
 
+PROXY_SIGNAL_MAX_AGE_DAYS = 10
+
+
+def proxy_signal_events(filings: pd.DataFrame | None = None) -> list[dict]:
+    """위임장 **내용** 신호. `proxy_events`가 서식 접수를 알린다면 이쪽은 무슨 말이
+    적혔는지를 알린다 — 권유 재개, 이사 후보 지명, 합의, 경영권 방어 조치.
+
+    **인용문의 주장 주체를 제목에 붙인다.** 분쟁측 자료의 문장은 한쪽의 주장이지
+    확인된 사실이 아니다.
+    """
+    try:
+        import proxy as pxy
+    except Exception:
+        return []
+    try:
+        stored = pxy.findings(filings)
+        signals = pxy.recent_signals(PROXY_SIGNAL_MAX_AGE_DAYS, stored)
+    except Exception:
+        return []
+    events = []
+    for item in signals:
+        events.append({
+            "id": f"proxysig:{item['accn']}:{item['signal']}",
+            "tier": "위임장",
+            "kind": f"위임장 대결 · {item['signal']}",
+            "direction": item["direction"],
+            "when": item["filed"],
+            "form": item["form"], "items": "",
+            "excerpt": item.get("excerpt", ""),
+            "title": f"[{item['author']} 자료] {item['signal']} — {item['form']}",
+            "url": item.get("url", ""),
+            "throttled": False,
+        })
+    return events
+
+
 # ── 정기보고서 상태 (레드플래그) ──────────────────────────────────────────────
 # legal.py는 *사건*을 잡고 이건 *상태*를 잡는다. 계속기업 불확실성·내부통제 취약점은
 # 한 번 생기면 분기마다 반복 게재되고 문장에 may/could가 섞여 있어, legal.py의
@@ -1319,6 +1355,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
               + insider_events()
               + capex_events(m, filings)
               + proxy_events(filings)
+              + proxy_signal_events(filings)
               + energize_events(articles, filings, read_text)
               + milestone_events(articles)
               + redflag_events()

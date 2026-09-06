@@ -665,6 +665,26 @@ def _state_context(verdicts, state, price_frame, m) -> list[str]:
                        f"주주제안 마감 2026-09-10")
     except Exception:
         pass
+
+    # **서식 건수만으로는 대결이 살아 있는지 알 수 없다.** DFAN14A 47건이 쌓인 것과
+    # 그중에 철회 선언이 들어 있는 것은 완전히 다른 뜻이다. 원문에서 읽은 상태를 준다.
+    try:
+        import proxy as pxy
+        st = pxy.state()
+        if st["status"] != "없음":
+            line = (f"[상태·위임장대결] {st['status']} — {st['label']}. "
+                    f"창업자 Toby Neugebauer(2026-04-30 Cause 해임)측이 지분 22.7~24.1%로 "
+                    f"이사회 교체와 회사 매각을 요구했고, 회사는 이사 선임 정족수를 70%로 "
+                    f"올리는 정관 개정으로 맞섰다")
+            sig = st.get("last_signal")
+            if sig:
+                line += (f". 마지막 신호 {sig['filed']} {sig['signal']}"
+                         f"({sig['author']} 주장)")
+            out.append(line)
+        for item in pxy.calendar():
+            out.append(f"[상태·주총일정] D-{item['days']} ({item['date']}) {item['what']}")
+    except Exception:
+        pass
     if state:
         line = f"[상태·로드맵] {state.get('done')}/{state.get('total')}단계"
         if state.get("current"):
