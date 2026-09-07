@@ -1,7 +1,9 @@
 period,date,instrument,gross_musd,net_musd,dilutive,maturity,outstanding_musd,rate,terms,source
 2025 Q4,2025-10-01,IPO(보통주 신규 상장),745.6,,Y,,,,나스닥 상장 공모,10-K FY2025 (ProceedsFromIssuanceInitialPublicOffering)
-2025,2025-12-31,전환사채(상장 전 Series A·Seed),75.5,,Y,,,,상장 시 보통주로 전환됨,10-K FY2025 (ProceedsFromConvertibleDebt)
-2025 Q4,2025-12-31,Macquarie Term Loan,,,N,2026,0.0,48.9%,2026-02-10 전액 상환. 상환 손실 24.8백만달러 인식,10-Q 2026 Q2 Note 5
+2025 Q2,2025-05-31,전환사채 Seed(무담보),26.1,,Y,2030,,15% PIK,"전환가 $2.67/unit. 5년 만기. Series A·B와 함께 Preferred Units Financing 시 Class A Unit 39,262,586주로 전환되어 잔액 없음",424B4 2025-10-01 재무제표 주석
+2025 Q3,2025-07-29,전환사채 Series A(담보)·Series B,63.0,,Y,2030,,15% PIK,"Series A는 6~7월 발행 63.0(전환가 $4.00/unit). Series B는 2025-07-29 Firebird 인수 대가로 발행한 담보부 어음. 원금 합계는 89.1 이상이나 10-K XBRL 현금유입 기준은 75.5 — 인수 대가분은 현금이 아니다",424B4 2025-10-01 재무제표 주석
+2025 Q3,2025-08-29,Macquarie Term Loan,100.0,,N,2026,0.0,48.9%,"Macquarie Equipment Capital가 대주단 대리인. 한도 100(Macquarie 승인 시 250까지 증액 가능)이며 Siemens 계약 대금 용도. 차주는 Fermi/Firebird Equipment HoldCo, 회사가 보증. 2026-02-10 전액 상환하며 상환 손실 24.8 인식",424B4 2025-10-01 · 10-Q 2026 Q2 Note 5
+2025 Q3,2025-08-29,Preferred Units 사모(Macquarie 주도 컨소시엄),107.6,,Y,,,15% PIK,"제3자 투자자 컨소시엄 대상 사모. 15% 누적 현물배당(연복리)이며 보통주와 동일 배당을 전환 기준으로 추가 수령. IPO 시 보통주로 전환되어 잔액 없음. **Term Loan과 같은 날 체결된 별개 거래다**",424B4 2025-10-01
 2026 Q1,2026-02-10,Turbine Warehouse 장비금융(MUFG),500.0,,N,2027-08-10,444.9,12.2%,"한도 500. 분기 최소상환 원금의 10%(1단계 400MW 리스 서명 시 5%로 경감, 기준일 폐쇄 후 9개월). 잔액은 만기 일시상환",10-Q 2026 Q2 Note 5
 2026 Q1,2026-03-26,Turbine Warehouse II 장비금융(CLMG/Beal),165.0,,N,2028-12-26,14.7,17.0%,"한도 165(이자·수수료용 22.9 유보). 폐쇄 후 33개월 만기. 만기 시 exit fee 37.0에서 누적이자 차감액 지급",10-Q 2026 Q2 Note 5
 2026 Q2,2026-06-30,High Voltage 장비금융(Keystone),,,N,2031,77.3,14.1%,"최소유동성 20.0 유지 약정. **2026-12-31까지 승인된 고객계약 미수령 시 의무 조기상환**. 담보가치 대비 원금 110% 한도",10-Q 2026 Q2 Note 5
