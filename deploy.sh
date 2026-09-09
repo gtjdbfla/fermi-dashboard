@@ -36,9 +36,18 @@ $(git status --porcelain | head -10)
 fi
 AFTER=$(git rev-parse HEAD)
 
-[ "$BEFORE" = "$AFTER" ] && exit 0
+# **받아온 커밋이 아니라 배포된 커밋과 비교한다.**
+# 전에는 `[ "$BEFORE" = "$AFTER" ] && exit 0` 이었다. pull은 됐는데 빌드가 깨지면
+# 다음 실행부터는 BEFORE = AFTER라 아무것도 안 하고 빠져나간다 — 저장소는 새 코드,
+# 컨테이너는 옛 코드인 채로 **영원히 멈춘다.** 실제로 그 상태로 발견했다.
+# 마지막으로 성공한 커밋을 적어 두고 그것과 비교하면 실패한 배포를 다음 크론이 다시 집는다.
+STATE=.deployed
+DEPLOYED=$(cat "$STATE" 2>/dev/null || echo "")
+[ -z "$DEPLOYED" ] && DEPLOYED="$BEFORE"
 
-CHANGED=$(git diff --name-only "$BEFORE" "$AFTER")
+[ "$DEPLOYED" = "$AFTER" ] && exit 0
+
+CHANGED=$(git diff --name-only "$DEPLOYED" "$AFTER")
 echo "$(date '+%F %T') [pull] $BEFORE -> $AFTER"
 echo "$CHANGED" | sed 's/^/    /'
 
@@ -67,3 +76,7 @@ $(tail -5 /tmp/fermi_smoke.log)"
 else
     echo "$(date '+%F %T') [skip] 데이터만 변경 — 재빌드 없이 반영됨"
 fi
+
+# 여기까지 왔으면 컨테이너가 이 커밋으로 돈다. smoke 실패는 기록한다 — 배포 자체는
+# 됐고 화면이 문제라, 다시 빌드해도 같은 결과다. 알림으로 이미 알렸다.
+echo "$AFTER" > "$STATE"

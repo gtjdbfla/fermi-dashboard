@@ -5,3 +5,6 @@ __pycache__/
 logs/
 data/.cache/
 CLAUDE.md
+# deploy.sh가 마지막으로 배포에 성공한 커밋을 적어 둔다. 서버에만 생기는 파일이고,
+# 추적하면 작업트리가 더러워져 git pull --ff-only가 막힌다(함정 ②).
+.deployed

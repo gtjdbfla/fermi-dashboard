@@ -18,6 +18,7 @@
 import html
 import os
 import re
+import time
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -202,24 +203,53 @@ def configured() -> bool:
     return bool(os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"))
 
 
+SEND_TRIES = 3
+
+
+def _scrub(text: str) -> str:
+    """오류 문구에서 봇 토큰을 지운다.
+
+    requests의 예외 메시지에는 요청 URL이 통째로 들어 있다. 그대로 돌려주면
+    `logs/news.log`에 토큰이 평문으로 쌓인다 — 실제로 그렇게 쌓여 있었다.
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    return text.replace(token, "<토큰>") if token else text
+
+
 def send(text: str) -> tuple[bool, str]:
-    """HTML 서식으로 보낸다. 실패해도 예외를 올리지 않고 사유를 돌려준다."""
+    """HTML 서식으로 보낸다. 실패해도 예외를 올리지 않고 사유를 돌려준다.
+
+    **한 번 실패하면 그 알림은 사라진다.** 실패한 건은 기억하지 않아 다음 크론이
+    다시 시도하지만, 30분 뒤에는 나이 제한에 걸려 버려지는 사건도 있다. 그래서
+    여기서 먼저 몇 번 더 해본다.
+
+    실제로 겪은 실패는 `[Errno 101] Network is unreachable`이었다. 컨테이너가
+    api.telegram.org의 **IPv6 주소를 먼저 골랐는데 IPv6 경로가 없다.** IPv4로는
+    같은 순간에도 정상이라, 다시 시도하면 대개 붙는다. 근본 해결은 컨테이너에서
+    IPv6를 끄는 것이고 그건 인프라 쪽 결정이라 여기서는 재시도로 버틴다.
+    """
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not (token and chat_id):
         return False, "TELEGRAM_BOT_TOKEN/CHAT_ID 미설정"
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-                  "disable_web_page_preview": False},
-            timeout=TIMEOUT)
-        payload = response.json()
-    except Exception as error:
-        return False, f"{type(error).__name__}: {error}"
-    if not payload.get("ok"):
-        return False, str(payload.get("description") or payload)[:200]
-    return True, ""
+    last = ""
+    for attempt in range(SEND_TRIES):
+        try:
+            response = requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                      "disable_web_page_preview": False},
+                timeout=TIMEOUT)
+            payload = response.json()
+        except Exception as error:
+            last = _scrub(f"{type(error).__name__}: {error}")
+            time.sleep(1 + attempt)
+            continue
+        if not payload.get("ok"):
+            # 서식 오류·차단 같은 건 다시 보내도 똑같다. 재시도는 연결 실패에만 쓴다.
+            return False, _scrub(str(payload.get("description") or payload)[:200])
+        return True, ""
+    return False, f"{SEND_TRIES}회 시도 실패 — {last}"
 
 
 # ── 중복 방지 ─────────────────────────────────────────────────────────────────
