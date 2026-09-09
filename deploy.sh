@@ -51,6 +51,17 @@ CHANGED=$(git diff --name-only "$DEPLOYED" "$AFTER")
 echo "$(date '+%F %T') [pull] $BEFORE -> $AFTER"
 echo "$CHANGED" | sed 's/^/    /'
 
+# **이 스크립트는 자기 자신을 갱신한다.** sh는 스크립트를 통째로 읽지 않고 실행하면서
+# 바이트 오프셋으로 이어 읽는다. 그래서 pull로 deploy.sh의 길이가 바뀌면 남은 부분을
+# 엉뚱한 위치부터 읽어, 실행이 조용히 어긋난다. 실제로 이 파일에 상태 기록을 넣은 날
+# 그 줄이 실행되지 않았다. 새 사본으로 갈아타고 처음부터 다시 시작한다.
+# .deployed와 비교하므로 다시 시작해도 같은 일을 두 번 하지 않는다.
+if [ -z "$FERMI_REEXEC" ] && echo "$CHANGED" | grep -qx 'deploy.sh'; then
+    echo "$(date '+%F %T') [reexec] deploy.sh가 갱신됐다 — 새 사본으로 다시 실행"
+    FERMI_REEXEC=1 export FERMI_REEXEC
+    exec sh "$0"
+fi
+
 if echo "$CHANGED" | grep -qE '\.py$|^Dockerfile$|^requirements\.txt$|^\.streamlit/|^docker-compose\.yml$|^Caddyfile$'; then
     echo "$(date '+%F %T') [build] 코드 변경 감지 — 재빌드"
     if ! docker compose up -d --build; then
