@@ -425,6 +425,12 @@ with tabs[2]:
     heading("마일스톤 이행 현황")
     milestones = m["milestones"].copy()
     if not milestones.empty:
+        # **날짜가 지난 '예정'은 예정이 아니다.** 그대로 두면 2026-09-10 지명 마감처럼
+        # 지나간 기한이 계속 '예정'으로 남아, 지켰는지 넘겼는지 표로는 알 수 없다.
+        # 회사가 달성 공시를 내야 상태가 바뀌므로, 그 공백을 화면에서 메운다.
+        passed = ((milestones["status"] == "예정")
+                  & (milestones["date"] < pd.Timestamp.today().normalize()))
+        milestones.loc[passed, "status"] = "⏰ 기한 지남 · 확인 필요"
         milestones["date"] = milestones["date"].dt.date
         table(milestones.rename(columns={"date": "일자", "category": "구분", "milestone": "내용",
                                          "status": "상태", "source": "출처"}))
@@ -750,7 +756,11 @@ with tabs[6]:
                     st.caption("⚠️ 분쟁측이 쓴 문장이다. 한쪽의 주장이지 확인된 사실이 아니다.")
             if upcoming:
                 st.markdown(" · ".join(
-                    f"**D-{u['days']}** {u['date']} {esc(u['what'])}" for u in upcoming))
+                    f"**{pxy.dday(u['days'])}** {u['date']} {esc(u['what'])}"
+                    for u in upcoming))
+                for u in upcoming:
+                    if u.get("note"):
+                        st.caption(f"⏰ {u['date']} 마감이 지났다 — {esc(u['note'])}")
 
     # ── 판독(앞면에서 내려온 것) ──────────────────────────────────────────────
     review = fr.cached()
@@ -798,7 +808,7 @@ with tabs[6]:
         person = ""
         if str(row.form).strip() in ("3", "4"):
             try:
-                person = ins.describe(accn, row.url, row.form)
+                person = ins.describe(accn, row.url, row.form, row.filed)
             except Exception:
                 person = ""
         badge = "🤖" if note_row else ("👤" if person else "·")

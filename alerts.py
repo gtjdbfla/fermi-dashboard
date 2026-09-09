@@ -654,6 +654,49 @@ def proxy_signal_events(filings: pd.DataFrame | None = None) -> list[dict]:
     return events
 
 
+# ── 주총 기한 ─────────────────────────────────────────────────────────────────
+# **여기 있는 알림은 전부 공시가 와야 울린다.** 그런데 2026-09-10 지명 마감의 답은
+# 대개 *공시가 오지 않는 것*이다 — 분쟁측이 후보를 내지 않으면 아무 서식도 접수되지
+# 않고, 그래서 이 파일의 어느 갈래도 그날을 알아채지 못한다. 침묵이 곧 결론인 기한은
+# 달력으로 울려야 한다. covenant_events와 같은 구조다(카운트다운 + 당일 판정).
+MEETING_MARKS = (30, 14, 7, 3, 1, 0)
+
+
+def meeting_events(filings: pd.DataFrame | None = None) -> list[dict]:
+    """주총 분기점 카운트다운과 마감 판정. 공시가 아니라 달력이 방아쇠다."""
+    try:
+        import proxy as pxy
+        items = pxy.calendar()
+    except Exception:
+        return []
+    events = []
+    for item in items:
+        left = int(item["days"])
+        base = {"tier": "주총기한", "kind": item["what"], "deadline": item["date"],
+                "when": str(pd.Timestamp.today().normalize().date()),
+                "form": "", "items": "", "excerpt": "", "title": item["what"],
+                "url": DASHBOARD_URL, "note": item.get("note", ""), "left": left}
+        if left < 0:
+            # 지난 뒤 하루만 판정을 보낸다. 매일 보내면 소음이다.
+            if left == -1:
+                # **"지명이 없었다"는 확인하고 말해야 한다.** 마감 전에 분쟁측이 실제로
+                # 후보를 냈는데 끝났다고 보내면 판정을 거꾸로 뒤집는 알림이 된다.
+                try:
+                    revived = pxy.revival(pxy.findings(filings), until=item["date"],
+                                          signals=pxy.NOMINATION_SIGNALS)
+                except Exception:
+                    revived = None
+                events.append({**base, "id": f"meeting:{item['date']}:verdict",
+                               "phase": "경과", "revived": revived})
+            continue
+        mark = min([x for x in MEETING_MARKS if left <= x], default=None)   # COVENANT_MARKS 주석 참고
+        if mark is None:
+            continue
+        events.append({**base, "id": f"meeting:{item['date']}:{mark}",
+                       "phase": "카운트다운"})
+    return events
+
+
 # ── 정기보고서 상태 (레드플래그) ──────────────────────────────────────────────
 # legal.py는 *사건*을 잡고 이건 *상태*를 잡는다. 계속기업 불확실성·내부통제 취약점은
 # 한 번 생기면 분기마다 반복 게재되고 문장에 may/could가 섞여 있어, legal.py의
@@ -913,7 +956,11 @@ def covenant_events(m: dict | None = None) -> list[dict]:
                                "left": left, "phase": "미충족"})
             continue
 
-        mark = next((x for x in COVENANT_MARKS if left <= x), None)
+        # **`next()`를 쓰면 안 된다.** 마크가 내림차순이라 첫 일치는 항상 가장 큰 값
+        # (90)이고, id가 `covenant:...:90`으로 고정돼 D-90 한 통 뒤로는 전부 중복
+        # 처리됐다. 60·30·14·7·3·1일 알림이 한 번도 나간 적이 없다.
+        # 지금 도달한 **가장 작은** 마크를 골라야 단계마다 한 통씩 나간다.
+        mark = min([x for x in COVENANT_MARKS if left <= x], default=None)
         if mark is None:
             continue
         events.append({**base, "id": f"covenant:{deadline}:{mark}",
@@ -1217,6 +1264,33 @@ def compose(event: dict, m: dict) -> str:
                           "<b>DEF 14A</b>에 실린다."]
         lines += ["", "2026-10-30 첫 정기주총은 <b>400MW 약정 기한(11-10) 11일 전</b>이다. "
                       "이사회가 흔들리면 15년 리스에 서명할 테넌트가 서명을 미룬다."]
+    elif event["tier"] == "주총기한":
+        import proxy as pxy
+        left = event.get("left", 0)
+        tag = pxy.dday(left)
+        if event.get("phase") == "경과":
+            revived = event.get("revived")
+            lines = [f"⏰ <b>주총 기한 경과 — {_escape(event['deadline'])}</b>", "",
+                     f"<b>{_escape(event['kind'])}</b>", ""]
+            if revived:
+                lines += [f"마감 전에 <b>{_escape(revived['signal'])}</b> 신호가 있었다 — "
+                          f"{_escape(revived['filed'])} {_escape(revived['form'])} "
+                          f"({_escape(revived['author'])} 자료). "
+                          "<b>대결이 되살아났을 수 있다.</b>"]
+            else:
+                lines += ["이 기한까지 분쟁측의 <b>지명·재개 공시가 없었다.</b> "
+                          "지명이 없으면 10-30 주총에서 이사회를 두고 붙을 자리가 없다."]
+            if event.get("note"):
+                lines += ["", f"<i>{_escape(event['note'])}</i>"]
+        else:
+            mark = "🔴" if left <= 3 else ("🟡" if left <= 14 else "⏳")
+            lines = [f"{mark} <b>주총 기한 {tag}</b> · {_escape(event['deadline'])}", "",
+                     f"<b>{_escape(event['kind'])}</b>"]
+            lines += ["", "<b>이 알림은 공시가 아니라 달력이 울린 것이다.</b> "
+                          "분쟁측이 후보를 내지 않으면 아무 서식도 접수되지 않으므로, "
+                          "침묵 자체가 답인 기한은 이렇게만 알 수 있다."]
+        lines += ["", "2026-10-30 첫 정기주총은 <b>400MW 약정 기한(11-10) 11일 전</b>이다. "
+                      "이사회가 흔들리면 15년 리스에 서명할 테넌트가 서명을 미룬다."]
     elif event["tier"] == "레드플래그":
         icon = {"신규": "🚩", "해소": "🟢", "변경": "🔶"}.get(event["kind"], "🚩")
         lines = [f"{icon} <b>정기보고서 상태 {_escape(event['kind'])} — "
@@ -1356,6 +1430,7 @@ def check(m: dict, articles: pd.DataFrame, filings: pd.DataFrame,
               + capex_events(m, filings)
               + proxy_events(filings)
               + proxy_signal_events(filings)
+              + meeting_events(filings)
               + energize_events(articles, filings, read_text)
               + milestone_events(articles)
               + redflag_events()

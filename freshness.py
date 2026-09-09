@@ -171,9 +171,28 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
     # ── 사람이 확정하는 계층 ──────────────────────────────────────────────────
     # 계약 MW는 8-K 본문을 읽어야 나온다. AI 판독은 자동으로 돌지만 숫자 확정은 사람이 한다 —
     # 옵션을 계약으로 잘못 읽으면 핵심 판정 ①이 통째로 틀어진다.
-    add("사람 확정", "계약·용량 수치",
-        str(pd.Timestamp(m["staleness_asof"]).date()) if m.get("staleness_asof") is not None else None,
-        None, "새 8-K 감지는 자동 · 반영은 커밋")
+    #
+    # **이 줄이 오래 거짓말을 했다.** `add(..., age=None)`으로 넣으면 `late` 판정이
+    # 항상 False라 상태가 늘 ✅였다. 기준일이 2026-08-14에 2주 넘게 멈춰 있는 동안에도
+    # 신선도 표는 초록이었고, 그래서 digest의 `_staleness`(⚠️ 줄만 걷어간다)도 이
+    # 층을 한 번도 리포트에 올리지 않았다. **자동층은 크론이 멈추면 티가 나는데
+    # 사람층은 아무도 안 하면 티가 안 난다** — 유일한 감시자가 여기다.
+    # 나이가 아니라 **미검토 공시 건수**로 판정한다. 기준일이 오래됐어도 그 뒤로
+    # 반영할 공시가 없었다면 낡은 게 아니다.
+    manual_asof = (str(pd.Timestamp(m["staleness_asof"]).date())
+                   if m.get("staleness_asof") is not None else None)
+    try:
+        import fundamentals as fd
+        pending = int(fd.staleness(m).get("count") or 0)
+    except Exception:
+        pending = 0
+    records.append({
+        "구분": "사람 확정", "데이터": "계약·용량 수치",
+        "최신 시점": manual_asof or "–",
+        "경과": f"미검토 공시 {pending}건" if pending else "미검토 없음",
+        "갱신 주기": "새 8-K 감지는 자동 · 반영은 커밋",
+        "상태": "⚠️ 지연" if pending else ("· 없음" if manual_asof is None else "✅"),
+    })
     # AI 호출량 — 무료 한도는 모델별로 잡히고, stock_dashboard와 키를 공유하면 같이 깎인다.
     # 얼마나 쓰고 있는지 보이지 않으면 429가 날 때까지 모른다.
     import ai_review

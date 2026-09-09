@@ -233,18 +233,82 @@ def recent_signals(days: int = 30, stored: dict | None = None) -> list[dict]:
     return sorted(out, key=lambda x: x["filed"], reverse=True)
 
 
-# 주총 일정. 공시로 확정된 값이라 여기 둔다(2026-08-31 8-K).
+# 주총 일정. 공시로 확정된 값이라 여기 둔다(2026-08-25 이사회 결의, 8-K 2026-08-31).
+# 8-K Item 5.08은 세 기한(Rule 14a-8 주주제안 · 정관상 사전통지 · Rule 14a-19 보편위임장)을
+# **모두 같은 날 2026-09-10**로 못박았다. 그래서 날짜가 하나면 된다.
 ANNUAL_MEETING = "2026-10-30"
 PROPOSAL_DEADLINE = "2026-09-10"
+KEEP_AFTER_DAYS = 30
+
+# 마감이 지났다고 해서 "지명이 없었다"가 곧바로 확인되지는 않는다. 사전통지는 회사에
+# 직접 보내는 것이고 공시 의무가 붙지 않는다 — 분쟁측 PREC14A는 며칠~몇 주 뒤에 나올 수
+# 있다. 확정은 회사 DEF 14A의 후보 명단에서 난다. 이 문장을 데이터에 붙여 보내는 이유는
+# digest가 텍스트만 쓰기 때문이다.
+DEADLINE_CAVEAT = ("사전통지는 회사에 직접 하는 것이라 마감 당일 공시로는 확인되지 않는다. "
+                   "분쟁측 지명 여부는 회사 DEF 14A 후보 명단에서 확정된다.")
+
+
+# 권유 중단 발표일. **이 뒤에 나온 지명·재개만** 대결이 되살아났다는 뜻이 된다 —
+# 중단 이전의 지명 신호(2026-05~06에 여러 건 있다)를 그대로 세면 언제나 "지명 있음"이 된다.
+SUSPENDED_ON = "2026-07-03"
+REVIVAL_SIGNALS = ("이사 후보 지명", "권유 재개", "임시주총 소집 요구")
+# 주총 지명 마감을 판정할 때는 **이 둘만** 본다. 임시주총 소집 요구는 다른 선로다 —
+# 실제로 2026-07-08 DFAN14A에 그 신호가 있어서, 넣어두면 지명이 없어도 언제나
+# "되살아났다"가 나온다.
+NOMINATION_SIGNALS = ("이사 후보 지명", "권유 재개")
+
+
+def revival(stored: dict | None = None, since: str = SUSPENDED_ON,
+            until: str | None = None, signals: tuple = REVIVAL_SIGNALS) -> dict | None:
+    """중단 이후 대결이 되살아난 신호. 없으면 None.
+
+    마감이 지났을 때 "지명이 없었다"고 단정하기 전에 이걸 봐야 한다. 확인 없이 단정하면
+    분쟁측이 실제로 후보를 냈는데도 끝났다고 알리게 된다.
+    """
+    stored = findings() if stored is None else stored
+    start = pd.Timestamp(since)
+    end = pd.Timestamp(until) if until else None
+    best = None
+    for accn, v in stored.items():
+        if not v.get("contest"):
+            continue
+        filed = pd.to_datetime(v.get("filed"), errors="coerce")
+        if pd.isna(filed) or filed < start or (end is not None and filed > end):
+            continue
+        for sig in v.get("signals", []):
+            if sig["signal"] not in signals:
+                continue
+            if best is None or filed > pd.Timestamp(best["filed"]):
+                best = {"accn": accn, "filed": str(filed.date()), "signal": sig["signal"],
+                        "form": v.get("form", ""), "author": v.get("author", "미상")}
+    return best
+
+
+def dday(days: int) -> str:
+    """D-3 / D-DAY / D+2. 지난 날을 `D-{-1}`로 찍지 않으려고 따로 둔다."""
+    if days > 0:
+        return f"D-{days}"
+    return "D-DAY" if days == 0 else f"D+{-days}"
 
 
 def calendar() -> list[dict]:
-    """남은 분기점. D-day로 보여준다."""
+    """주총 분기점. D-day로 보여준다.
+
+    **지난 항목을 버리지 않는다.** 마감일은 지나가는 순간이 가장 큰 정보다 — 분쟁측이
+    09-10까지 후보를 지명하지 않으면 10-30 주총에서는 붙을 자리가 없다. `left >= 0`으로
+    걸러내면 바로 그 순간에 항목이 화면에서 조용히 사라져, 마감을 지켰는지 넘겼는지
+    화면만 보고는 알 수 없다. **아무 일도 없었던 것처럼 보이는 게 최악이다.**
+    지난 것도 KEEP_AFTER_DAYS 동안 D+로 남긴다.
+    """
     today = pd.Timestamp.today().normalize()
     out = []
     for when, what in ((PROPOSAL_DEADLINE, "Rule 14a-8 주주제안·이사 지명 사전통지 마감"),
                        (ANNUAL_MEETING, "제1회 정기 주주총회")):
         left = int((pd.Timestamp(when) - today).days)
-        if left >= 0:
-            out.append({"date": when, "what": what, "days": left})
+        if left < -KEEP_AFTER_DAYS:
+            continue
+        item = {"date": when, "what": what, "days": left, "passed": left < 0}
+        if left < 0 and when == PROPOSAL_DEADLINE:
+            item["note"] = DEADLINE_CAVEAT
+        out.append(item)
     return out

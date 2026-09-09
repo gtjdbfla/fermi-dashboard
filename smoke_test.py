@@ -19,7 +19,10 @@ from streamlit.testing.v1 import AppTest
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-EXPECTED_TABS = 10        # 하나라도 줄면 화면이 끝까지 안 그려진 것이다
+# 하나라도 줄면 화면이 끝까지 안 그려진 것이다. app.py의 st.tabs 목록과 **정확히**
+# 같아야 한다 — 탭을 늘리고 이 값을 안 올리면 검사에 여유분이 생겨, 탭 하나가 조용히
+# 사라져도 통과한다. 실제로 11탭이 된 뒤에도 10으로 남아 한 칸이 비어 있었다.
+EXPECTED_TABS = 11
 
 
 def run_once(label: str, user_agent: str | None) -> bool:

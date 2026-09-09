@@ -211,7 +211,8 @@ def _new_filings(filings: pd.DataFrame, mark: pd.Timestamp) -> tuple[list[str], 
         # Form 3·4는 서식 번호만으로는 아무 내용이 없다. 누구인지가 곧 내용이다.
         try:
             import insider as ins
-            person = ins.describe(getattr(row, "accn", ""), getattr(row, "url", ""), row.form)
+            person = ins.describe(getattr(row, "accn", ""), getattr(row, "url", ""),
+                                  row.form, getattr(row, "filed", None))
         except Exception:
             person = ""
         who = f" — {person}" if person else ""
@@ -682,7 +683,13 @@ def _state_context(verdicts, state, price_frame, m) -> list[str]:
                          f"({sig['author']} 주장)")
             out.append(line)
         for item in pxy.calendar():
-            out.append(f"[상태·주총일정] D-{item['days']} ({item['date']}) {item['what']}")
+            line = (f"[상태·주총일정] {pxy.dday(item['days'])} ({item['date']}) "
+                    f"{item['what']}")
+            if item.get("passed"):
+                line += " — 이 기한은 이미 지났다"
+            if item.get("note"):
+                line += f". {item['note']}"
+            out.append(line)
     except Exception:
         pass
     if state:
@@ -735,11 +742,30 @@ def _staleness(m: dict, price_frame) -> list[str]:
     """크론이 조용히 멈췄으면 리포트에서 드러나야 한다."""
     import freshness as fresh
     rows = fresh.rows(m, price_frame)
+    lines = []
+
+    # **사람이 하는 층을 따로 먼저 낸다.** 크론은 멈추면 티가 나지만 수동 반영은
+    # 아무도 안 해도 티가 안 난다 — 실제로 기준일이 2주 넘게 멈춰 있었다.
+    # 다른 지연과 한 줄에 뭉뚱그리면 또 묻히므로, 할 일을 명시해서 따로 세운다.
+    try:
+        import fundamentals as fd
+        stale = fd.staleness(m)
+        if stale.get("count"):
+            forms = ", ".join(sorted(set(stale["filings"]["form"].astype(str))))
+            lines.append(f"📌 <b>수동 반영 밀림</b> — 기준일 "
+                         f"{pd.Timestamp(stale['asof']).date()} 이후 미검토 공시 "
+                         f"{stale['count']}건({forms}). 읽고 CSV·review_log에 반영해 "
+                         f"커밋해야 이 줄이 사라진다")
+    except Exception:
+        pass
+
     late = rows[rows["상태"].astype(str).str.startswith("⚠️")]
+    # 위에서 이미 자세히 냈으므로 아래 요약에서는 뺀다.
+    late = late[late["데이터"] != "계약·용량 수치"]
     if late.empty:
-        return []
-    lines = ["⚠️ <b>갱신 지연</b> — " + ", ".join(f"{r['데이터']}({r['경과']})"
-                                              for _, r in late.iterrows())]
+        return lines
+    lines.append("⚠️ <b>갱신 지연</b> — " + ", ".join(f"{r['데이터']}({r['경과']})"
+                                                  for _, r in late.iterrows()))
     dead = [name for name, info in dc.health().items() if not info.get("rows")]
     if dead:
         lines.append("⚠️ <b>수집 0건</b> — " + ", ".join(dead))

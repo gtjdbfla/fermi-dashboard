@@ -198,6 +198,13 @@ def run(filings: pd.DataFrame | None = None, limit: int = BATCH,
     stored = notes()
     pending = queue(filings, stored)
     if pending.empty:
+        # **다 채웠으면 파일을 안 쓴다 — 그게 함정이다.** 신선도 표의 '경과'는 캐시
+        # 파일의 mtime이라, 과거분을 전부 만들고 나면 그 시각이 영영 멈춘다. 크론은
+        # 30분마다 정상적으로 확인하고 있는데 화면에는 며칠째 지연으로 뜬다.
+        # 항상 켜진 경고는 없는 것보다 나쁘다. 확인만 하고 지나갈 때도 mtime을 올려
+        # '마지막 점검 시각'이 되게 한다.
+        dc.touch(CACHE)
+        dc.record_health("공시 요약(AI)", len(stored))
         return {"made": 0, "left": 0, "error": ""}
 
     if not os.environ.get("GEMINI_API_KEY"):

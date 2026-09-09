@@ -20,6 +20,7 @@ sec_edgar.load_filings()는 Form 4를 '내부자 거래' 그룹으로 세기만 
 import re
 from xml.etree import ElementTree
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -151,8 +152,45 @@ def who(accn: str, url: str) -> dict:
     return info
 
 
-def describe(accn: str, url: str, form: str) -> str:
-    """'Anna Bofa · 임원 Chief Commercial Officer' 같은 한 줄. 못 읽으면 빈 문자열."""
+# Section 16(a) 제출 기한. 서식마다 세는 단위가 다르다 — 이걸 섞으면 안 된다.
+#   Form 4는 **거래일 다음 2영업일 안**이라 주말·휴일이 빠지고,
+#   Form 3은 내부자가 된 날로부터 **10일(달력일)** 안이다.
+# 값은 (기한, 영업일로 세는가).
+FILING_DEADLINE = {"4": (2, True), "3": (10, False)}
+
+
+def late_days(form, period, filed) -> int | None:
+    """기한을 며칠 넘겨 냈는가. 0이면 정상, None이면 잴 수 없다.
+
+    **지각 신고는 그 자체가 지배구조 신호다.** Reg S-K Item 405는 지각분을 위임장에
+    따로 적게 하고, 반복되면 내부통제가 헐겁다는 뜻으로 읽힌다. 접수일만 보는 화면은
+    이걸 못 잡는다 — 거래일과 접수일이 얼마나 벌어졌는지를 봐야 드러난다.
+
+    **영업일 계산이 핵심이다.** 금요일 거래를 다음 주 화요일에 내면 달력일로는 4일이라
+    늦어 보이지만 영업일로는 2일이라 정상이다. 달력일로 세면 이런 정상 건이 전부
+    지각으로 찍힌다. 미국 증시 휴일까지는 넣지 않았으므로, **1일 초과는 경계값이라
+    원문을 확인해야 한다**(휴일 하루가 끼면 정상인데 1일 지각으로 보인다).
+    """
+    rule = FILING_DEADLINE.get(str(form or "").strip())
+    if rule is None:
+        return None
+    limit, business = rule
+    start = pd.to_datetime(period, errors="coerce")
+    end = pd.to_datetime(filed, errors="coerce")
+    if pd.isna(start) or pd.isna(end) or end < start:
+        return None
+    if business:
+        used = int(np.busday_count(start.date(), end.date()))
+    else:
+        used = int((end.normalize() - start.normalize()).days)
+    return max(0, used - limit)
+
+
+def describe(accn: str, url: str, form: str, filed=None) -> str:
+    """'Anna Bofa · 임원 Chief Commercial Officer' 같은 한 줄. 못 읽으면 빈 문자열.
+
+    `filed`(접수일)를 주면 Section 16(a) 기한 초과분을 뒤에 배지로 붙인다.
+    """
     if str(form or "").strip() not in ("3", "4"):
         return ""
     info = who(accn, url)
@@ -162,6 +200,10 @@ def describe(accn: str, url: str, form: str) -> str:
     role = " ".join(x for x in (info.get("roles"), info.get("officer_title")) if x)
     if role:
         parts.append(role)
+    if filed is not None:
+        over = late_days(form, info.get("period"), filed)
+        if over:
+            parts.append(f"⏰ 지각신고 {over}일 (거래일 {info.get('period')})")
     return " · ".join(parts)
 
 

@@ -28,9 +28,18 @@ def load_price(symbol: str = "FRMI", period: str = "1y", interval: str = "1d") -
         "date": pd.to_datetime(result["timestamp"], unit="s"),
         "close": quote.get("close"),
         "volume": quote.get("volume"),
-    }).dropna(subset=["close"])
+    })
+    frame = _numeric(frame).dropna(subset=["close"])
     meta = result.get("meta", {})
     return _patch_last(frame.reset_index(drop=True), meta), meta
+
+
+def _numeric(frame: pd.DataFrame) -> pd.DataFrame:
+    """close·volume을 수치형으로 되돌린다. 결측이 섞여도 dtype이 object가 되지 않게."""
+    for column in ("close", "volume"):
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    return frame
 
 
 def _patch_last(frame: pd.DataFrame, meta: dict) -> pd.DataFrame:
@@ -43,6 +52,11 @@ def _patch_last(frame: pd.DataFrame, meta: dict) -> pd.DataFrame:
 
     **그럴듯해 보이는 틀린 값이라 눈으로는 못 잡는다.** 봉이 비어도 meta의
     regularMarketPrice/Time에는 값이 남아 있으므로 그걸로 메운다.
+
+    **거래량은 meta에 없다.** 예전엔 그 자리에 파이썬 `None`을 넣었는데, 그러면
+    volume 열의 dtype이 float64에서 object로 바뀐다. 열 전체가 object가 되면 이후
+    어떤 산술도 TypeError로 죽는다 — 다음날 새 봉이 들어와 자가치유되기 전까지.
+    결측은 `NaN`으로 두고 열을 수치형으로 되돌린다. NaN은 산술에 그냥 전파된다.
     """
     price = meta.get("regularMarketPrice")
     stamp = meta.get("regularMarketTime")
@@ -53,13 +67,15 @@ def _patch_last(frame: pd.DataFrame, meta: dict) -> pd.DataFrame:
     except (TypeError, ValueError):
         return frame
     if frame.empty:
-        return pd.DataFrame([{"date": when, "close": float(price), "volume": None}])
+        return _numeric(pd.DataFrame([{"date": when, "close": float(price),
+                                       "volume": float("nan")}]))
     last = pd.Timestamp(frame.iloc[-1]["date"]).normalize()
     if when <= last:
         return frame          # 봉이 최신이면 손대지 않는다
-    patched = pd.concat(
-        [frame, pd.DataFrame([{"date": when, "close": float(price), "volume": None}])],
-        ignore_index=True)
+    patched = _numeric(pd.concat(
+        [frame, pd.DataFrame([{"date": when, "close": float(price),
+                               "volume": float("nan")}])],
+        ignore_index=True))
     try:
         import diskcache as dc
         dc.record_health("주가 봉 결측 보정", 1)
