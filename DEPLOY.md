@@ -58,6 +58,15 @@ crontab -e
 */30 * * * * /home/yulimseo/fermi-dashboard/deploy.sh >> /home/yulimseo/fermi-dashboard/logs/deploy.log 2>&1
 ```
 
+**실패하면 텔레그램으로 온다.** 로그에만 남기면 갱신이 멈춘 걸 몇 주 뒤 화면을 보고서야
+알게 된다. `git pull --ff-only` 실패 · 재빌드 실패 · smoke 실패 세 가지가 알림으로 오고,
+성공은 조용하다. `.env`의 `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`를 쓰며, 없으면 알림만
+건너뛰고 배포는 그대로 돈다.
+
+`git pull` 실패의 원인은 거의 항상 하나다 — 컨테이너나 손으로 `data/`를 건드려 작업트리가
+더러워진 것이다. **이 상태로 두면 이후 모든 갱신이 조용히 멈춘다.** `git checkout -- <파일>`로
+되돌려야 다시 돈다.
+
 ### 실제 운영 크론 (서버 시각은 UTC)
 
 | 크론 | UTC | KST | 하는 일 |
