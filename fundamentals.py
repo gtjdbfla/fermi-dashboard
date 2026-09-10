@@ -77,6 +77,19 @@ def manual_values() -> dict:
     return {row["key"]: float(row["value"]) for _, row in frame.iterrows()}
 
 
+def manual_points() -> dict:
+    """key -> (값, 기준일). '어느 시점의 값인지'가 판정을 바꾸는 항목에 쓴다.
+
+    `manual_values()`는 날짜를 버린다. 자유·제한현금처럼 XBRL이 다음 분기로 넘어가면
+    낡아버리는 값은 기준일을 함께 봐야 낡은 구분을 새 총액에 잘못 붙이지 않는다.
+    """
+    frame = load_csv("latest_reported.csv")
+    if frame.empty:
+        return {}
+    return {row["key"]: (float(row["value"]), pd.Timestamp(row["period_end"]))
+            for _, row in frame.iterrows()}
+
+
 # 수동 CSV별로 "이 행이 근거로 삼은 공시 날짜"가 담긴 열.
 MANUAL_SOURCE_DATES = {
     "contracts.csv": "signed",
@@ -286,9 +299,37 @@ def compute(facts: dict, price_meta: dict) -> dict:
     metrics["asof_source"] = metrics["cash_source"]
 
     # 분기 말 이후 조달분까지 반영한 프로포마 현금. 런웨이는 이 값으로 봐야 현실에 맞는다.
+    # **다만 조달만 더하고 그 뒤 소진은 빼지 않은 값이다.** 분기말로부터 시간이 흐를수록
+    # 실제 잔액보다 커진다. 화면·리포트에서 '이후 소진 차감 전'이라고 밝혀야 한다.
     post_q = manual.get("post_q_financing_net", 0.0) + manual.get("post_q_capped_call_cost", 0.0)
     metrics["post_q_net"] = post_q
     metrics["cash_proforma"] = (metrics["cash_total"] or 0.0) + post_q
+    metrics["cash_proforma_days"] = (
+        int((pd.Timestamp.today().normalize() - pd.Timestamp(metrics["cash_asof"])).days)
+        if metrics["cash_asof"] is not None else None)
+
+    # **제한현금은 소진에 못 쓴다.** XBRL 태그가 `CashCashEquivalentsRestrictedCash...`라
+    # 총액에는 담보·에스크로로 묶인 돈이 섞여 있다. 런웨이 분모는 자유현금이어야 한다.
+    # 다만 자유·제한 구분은 수동 입력이라 XBRL이 다음 분기로 넘어가면 낡는다(함정 ⑩).
+    # 기준일이 현금 시계열의 끝과 같을 때만 쓰고, 어긋나면 구분 없음으로 되돌린다.
+    points = manual_points()
+    split_asof = points.get("cash_restricted", (None, None))[1]
+    aligned = (split_asof is not None and metrics["cash_asof"] is not None
+               and pd.Timestamp(split_asof) == pd.Timestamp(metrics["cash_asof"]))
+    metrics["cash_restricted"] = points["cash_restricted"][0] if aligned else None
+    if aligned and "cash_free" in points:
+        metrics["cash_free"] = points["cash_free"][0]
+    elif aligned and metrics["cash_total"] is not None:
+        metrics["cash_free"] = metrics["cash_total"] - metrics["cash_restricted"]
+    else:
+        metrics["cash_free"] = None
+    metrics["cash_free_proforma"] = (
+        metrics["cash_free"] + post_q if metrics["cash_free"] is not None else None)
+    # 자유현금을 못 가리면 총액으로 물러서되, 어느 쪽으로 쟀는지 남긴다.
+    metrics["runway_cash"] = (metrics["cash_free_proforma"]
+                              if metrics["cash_free_proforma"] is not None
+                              else metrics["cash_proforma"])
+    metrics["runway_basis"] = "자유현금" if metrics["cash_free_proforma"] is not None else "총현금"
 
     op_cf = quarterly(facts, TAG_OP_CF)
     metrics["op_cf_series"] = op_cf
@@ -314,9 +355,9 @@ def compute(facts: dict, price_meta: dict) -> dict:
 
     total_burn = (metrics["op_burn_q"] or 0.0) + (metrics["capex_q"] or 0.0)
     metrics["burn_q_total"] = total_burn or None
-    metrics["runway_ops"] = _safe_div(metrics["cash_proforma"], metrics["op_burn_q"])
+    metrics["runway_ops"] = _safe_div(metrics["runway_cash"], metrics["op_burn_q"])
     metrics["runway_ops"] = metrics["runway_ops"] * 3 if metrics["runway_ops"] else None
-    metrics["runway_total"] = _safe_div(metrics["cash_proforma"], metrics["burn_q_total"])
+    metrics["runway_total"] = _safe_div(metrics["runway_cash"], metrics["burn_q_total"])
     metrics["runway_total"] = metrics["runway_total"] * 3 if metrics["runway_total"] else None
 
     # --- 2. 자본투입 -----------------------------------------------------------
@@ -370,6 +411,23 @@ def compute(facts: dict, price_meta: dict) -> dict:
         )
     else:
         metrics["revenue_per_mw_year"] = None
+
+    # **서명과 발효는 다르다.** TensorWave 리스는 서명(2026-08-09)됐지만 이사회 승인과
+    # 임대인의 프로젝트금융 조달이라는 선행조건에 걸려 있고, 충족되지 않으면 양측 모두
+    # 해지할 수 있다(10-Q 2026 Q2 Note 9). `binding`은 서명 여부라 그대로 두고 — 약정
+    # 문턱(MUFG 400MW)은 '서명'을 묻기 때문이다 — 종결 여부는 따로 센다.
+    pending = (binding[binding.get("closing_status").astype(str).str.strip() == "미종결"]
+               if not binding.empty and "closing_status" in binding.columns
+               else binding.iloc[0:0])
+    metrics["mw_pending_close"] = float(pending["phase1_mw"].sum()) if not pending.empty else 0.0
+    metrics["pending_close_count"] = int(len(pending))
+    metrics["pending_close"] = pending
+    deadlines = (pd.to_datetime(pending["closing_deadline"], errors="coerce").dropna()
+                 if not pending.empty else pd.Series(dtype="datetime64[ns]"))
+    metrics["closing_deadline"] = deadlines.min() if not deadlines.empty else None
+    # 종결된 계약만으로 다시 잰 커버리지. 서명 기준 수치와 나란히 놓아야 차이가 보인다.
+    metrics["mw_closed"] = metrics["mw_contracted"] - metrics["mw_pending_close"]
+    metrics["closed_vs_landed"] = _safe_div(metrics["mw_closed"], metrics["mw_landed"])
 
     milestones = load_csv("milestones.csv")
     metrics["milestones"] = milestones

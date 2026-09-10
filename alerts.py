@@ -961,6 +961,12 @@ def covenant_events(m: dict | None = None) -> list[dict]:
             continue
         left = int(left)
         deadline = pd.Timestamp(row["deadline"]).date()
+        # **id에 시설을 넣어야 한다.** 같은 날짜에 약정이 둘 이상 걸릴 수 있는데
+        # (2026-12-31은 Keystone 의무 조기상환과 TTU 지상권 해지가 겹친다) 날짜만으로
+        # id를 만들면 뒤엣것이 전부 중복 처리돼 **한 번도 나가지 않는다.**
+        # 부지를 잃는 쪽 알림이 그렇게 죽어 있었다.
+        slug = re.sub(r"[^0-9A-Za-z가-힣]+", "", str(row.get("facility") or ""))[:12] or "약정"
+        key = f"covenant:{deadline}:{slug}"
         threshold = row.get("threshold_mw")
         threshold = float(threshold) if pd.notna(threshold) else None
         met = threshold is not None and contracted >= threshold
@@ -975,14 +981,14 @@ def covenant_events(m: dict | None = None) -> list[dict]:
 
         # 문턱을 넘었다 — 기한과 무관하게 알린다.
         if met:
-            events.append({**base, "id": f"covenant:{deadline}:met",
+            events.append({**base, "id": f"{key}:met",
                            "left": left, "phase": "충족"})
             continue
 
         # 기한 당일 또는 지난 뒤 — 미충족을 명시한다. 하루만 보낸다.
         if left <= 0:
             if left >= -1:
-                events.append({**base, "id": f"covenant:{deadline}:verdict",
+                events.append({**base, "id": f"{key}:verdict",
                                "left": left, "phase": "미충족"})
             continue
 
@@ -993,7 +999,7 @@ def covenant_events(m: dict | None = None) -> list[dict]:
         mark = min([x for x in COVENANT_MARKS if left <= x], default=None)
         if mark is None:
             continue
-        events.append({**base, "id": f"covenant:{deadline}:{mark}",
+        events.append({**base, "id": f"{key}:{mark}",
                        "left": left, "phase": "카운트다운"})
     return events
 
@@ -1227,13 +1233,24 @@ def compose(event: dict, m: dict) -> str:
                      f"조건: {_escape(event['title'])}", "",
                      f"계약 {contracted:,.0f} MW ≥ 기준 {threshold:,.0f} MW — <b>충족했다.</b>"]
         elif phase == "미충족":
-            lines = [f"🔴 <b>약정 미충족 — 기한 {_escape(event['deadline'])} 경과</b>", "",
-                     f"<b>{_escape(event['kind'])}</b>",
-                     f"조건: {_escape(event['title'])}", ""]
+            # MW 문턱이 없는 조건은 화면의 숫자만으로 충족 여부를 알 수 없다. 이사회 승인·
+            # 금융 종결·NTP 수령은 공시로 확인해야 하는 것이라 '미충족'이라고 단정하면
+            # 안 된다 — 위임장 마감에서 배운 것과 같다(공시가 없는 게 답인 기한).
             if threshold:
-                lines.append(f"계약 {contracted:,.0f} MW < 기준 {threshold:,.0f} MW — "
-                             f"<b>{threshold - contracted:,.0f} MW 부족.</b>")
-            lines += ["", f"결과: {_escape(event['consequence'])}"]
+                lines = [f"🔴 <b>약정 미충족 — 기한 {_escape(event['deadline'])} 경과</b>", "",
+                         f"<b>{_escape(event['kind'])}</b>",
+                         f"조건: {_escape(event['title'])}", "",
+                         f"계약 {contracted:,.0f} MW < 기준 {threshold:,.0f} MW — "
+                         f"<b>{threshold - contracted:,.0f} MW 부족.</b>",
+                         "", f"결과: {_escape(event['consequence'])}"]
+            else:
+                lines = [f"🟠 <b>약정 기한 경과 — 충족 여부 확인 필요</b> · "
+                         f"{_escape(event['deadline'])}", "",
+                         f"<b>{_escape(event['kind'])}</b>",
+                         f"조건: {_escape(event['title'])}", "",
+                         "<b>화면의 수치로는 판정할 수 없는 조건이다.</b> 8-K·10-Q에서 "
+                         "충족 여부를 직접 확인해라.",
+                         "", f"미충족 시: {_escape(event['consequence'])}"]
         else:
             mark = "🔴" if left <= 14 else ("🟡" if left <= 60 else "⏳")
             lines = [f"{mark} <b>약정 기한 D-{left}</b> · {_escape(event['deadline'])}", "",
@@ -1242,9 +1259,12 @@ def compose(event: dict, m: dict) -> str:
             if threshold:
                 lines.append(f"현재 {contracted:,.0f} MW / 기준 {threshold:,.0f} MW "
                              f"— <b>{threshold - contracted:,.0f} MW 부족</b>")
-            lines += ["", f"미충족 시: {_escape(event['consequence'])}", "",
-                      "이 기한은 만기보다 먼저 온다. 테넌트를 못 잡으면 커버리지가 안 오르는 데서 "
-                      "끝나지 않고 <b>상환 부담이 즉시 커진다.</b>"]
+            lines += ["", f"미충족 시: {_escape(event['consequence'])}"]
+            # 이 문장은 MW 문턱이 걸린 약정에만 맞는다. 종결·NTP처럼 테넌트 수와
+            # 무관한 기한에 붙이면 엉뚱한 설명이 된다.
+            if threshold:
+                lines += ["", "이 기한은 만기보다 먼저 온다. 테넌트를 못 잡으면 커버리지가 "
+                          "안 오르는 데서 끝나지 않고 <b>상환 부담이 즉시 커진다.</b>"]
     elif event["tier"] == "가설사슬":
         icon = {"진전": "🟢", "지연": "🟡", "후퇴": "🔴",
                 "발생": "🟠"}.get(event["direction"], "⚪")

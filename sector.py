@@ -314,13 +314,24 @@ def fermi_position(m: dict) -> list[dict]:
     coverage = (contracted / landed * 100) if landed else None
     benchmark = coverage_benchmark().get("유지")
 
+    # 투입액은 데이터에서 뽑는다. 문장에 박아두면 PP&E가 커져도 화면이 옛 숫자를 말한다
+    # ($1.2B로 박혀 있던 것이 $1.55B가 된 뒤에도 그대로였다).
+    spent = m.get("ppe_gross")
+    spent_text = f"${spent / 1e9:.2f}B" if spent else "확인 불가"
+    # **이 축은 좋아질 수 없다.** 순서를 묻는 질문이라 이미 일어난 일이고, 커버리지가
+    # 올라도 '투입이 먼저였다'는 사실은 바뀌지 않는다. 사람이 개선을 기다리지 않도록
+    # 고정된 이력임을 문장에 적는다. 대신 움직이는 커버리지는 value로 계속 보여준다.
     items = [{
         "label": "① 계약이 자본 투입에 선행했는가",
         "status": "critical",
         "value": f"반입 설비의 {coverage:.0f}%" if coverage is not None else "산출 불가",
-        "detail": f"$1.2B 투입 후 첫 계약 체결. 유지 그룹 관측 범위는 "
-                  f"{benchmark[0]:.0f}~{benchmark[1]:.0f}%" if benchmark else "",
-        "verdict": "미달 — 투입과 계약의 순서가 반대다",
+        "detail": (f"{spent_text}(PP&E 총액) 투입 후 첫 계약 체결. 유지 그룹 관측 범위는 "
+                   f"{benchmark[0]:.0f}~{benchmark[1]:.0f}%. " if benchmark
+                   else f"{spent_text}(PP&E 총액) 투입 후 첫 계약 체결. ")
+                  + "**이 판정은 앞으로도 바뀌지 않는다** — 순서를 묻는 항목이라 이미 "
+                    "결정된 이력이다. 움직이는 것은 위의 커버리지 수치이고, 그것이 "
+                    "유지 그룹 범위에 들어가는지를 봐야 한다.",
+        "verdict": "미달 — 투입과 계약의 순서가 반대다 (되돌릴 수 없는 이력)",
     }, {
         "label": "② 계약 기간이 부채 만기를 덮는가",
         **{k: v for k, v in _maturity_card().items() if k != "gap_years"},

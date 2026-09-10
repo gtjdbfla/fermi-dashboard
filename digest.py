@@ -123,6 +123,7 @@ def _covenants() -> list[str]:
     """만기보다 먼저 오는 약정 기한. 매일 남은 일수를 보여준다."""
     try:
         import maturity as mt
+        import proxy as pxy
         rules = mt.covenants.__wrapped__() if hasattr(mt.covenants, "__wrapped__") else mt.covenants()
     except Exception:
         return []
@@ -134,10 +135,13 @@ def _covenants() -> list[str]:
         if left is None or pd.isna(left):
             continue
         left = int(left)
-        if left < 0:
+        # **지나간 기한을 바로 빼면 안 된다(함정 ⑦).** 기한은 지나가는 순간이 가장
+        # 큰 정보인데 `left < 0`으로 거르면 바로 그날 리포트에서 사라져 아무 일도
+        # 없었던 것처럼 보인다. proxy.calendar()와 같은 창(30일)을 쓴다.
+        if left < -pxy.KEEP_AFTER_DAYS:
             continue
-        mark = "🔴" if left <= 14 else ("🟡" if left <= 60 else "⏳")
-        lines.append(f"{mark} 약정 D-{left} ({pd.Timestamp(row['deadline']).date()}) — "
+        mark = "⚫" if left < 0 else ("🔴" if left <= 14 else ("🟡" if left <= 60 else "⏳"))
+        lines.append(f"{mark} 약정 {pxy.dday(left)} ({pd.Timestamp(row['deadline']).date()}) — "
                      f"{alerts._escape(str(row['condition'])[:44])}")
         # **결과를 함께 보여준다.** 조건만 44자로 자르면 "notice to proceed 수령"까지만
         # 보이고 "못 받으면 지상권이 해지된다"는 알맹이가 사라진다. 조건보다 결과가
@@ -301,10 +305,13 @@ def _summary_prompt(payload: str, facts: dict, state: str = "") -> str:
   좋은 예: · Philadelphia Financial Management가 42.5만 주를 신규 취득했다 [기사]
 
 ## 이미 알고 있는 배경 (절대 다시 쓰지 마라)
-- 구속력 있는 계약 {facts['contracted']:,.0f} MW / 고객 {facts['customers']}곳 → 커버리지 {facts['coverage']:.0f}%
+- 서명된 계약 {facts['contracted']:,.0f} MW / 고객 {facts['customers']}곳 → 커버리지 {facts['coverage']:.0f}%
 - 반입 설비 {facts['landed']:,.0f} MW · 분기 매출 {facts['revenue']} · 분기 영업현금흐름 {facts['op_cf']}
 - 살아남은 동종 기업은 자본 투입 시점 커버리지가 74~92%였다
 - 2026-11-10까지 400MW 서명 약정, 2027-08-10 만기 $445M
+- **TensorWave 222MW는 서명됐을 뿐 아직 종결 전이다.** 이사회 승인·프로젝트금융 조달이
+  선행조건이고 종결 예정일은 2026-09-30(연장 가능), 미충족 시 양측 해지 가능하다.
+  종결·해지·연장 중 무엇이 나오는지는 **새 소식이므로 반드시 다뤄라.**
 이 사실들은 **판단의 잣대로만 쓰고, 문장으로 되뇌지 마라.** 되뇌면 브리핑이 아니라
 매일 똑같은 안내문이 된다.
 

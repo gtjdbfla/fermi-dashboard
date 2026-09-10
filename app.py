@@ -271,19 +271,42 @@ with tabs[0]:
         "덮었고, 붕괴 4곳은 계약이 없거나(Tellurian) 만기가 어긋났다(New Fortress)."))
     st.caption(fresh.tab_line("contract", m, price_frame))
     metric_row([
-        ("구속력 있는 계약", fd.num(m.get("mw_contracted"), 0, " MW"), "서명 완료된 리스 기준"),
-        ("반입 설비 대비", fd.pct(m.get("contracted_vs_landed")), "확보한 설비 중 팔린 비중"),
+        ("서명된 계약", fd.num(m.get("mw_contracted"), 0, " MW"), "선행조건 충족 여부와 무관한 서명 기준"),
+        ("종결된 계약", fd.num(m.get("mw_closed"), 0, " MW"), "선행조건까지 충족돼 발효된 것만"),
+        ("반입 설비 대비", fd.pct(m.get("contracted_vs_landed")), "서명 기준 · 확보한 설비 중 팔린 비중"),
         ("장기 목표 대비", fd.pct(m.get("contracted_vs_target")), "17GW 목표 대비 실체"),
         ("고객 수", fd.num(m.get("customer_count"), 0, "개사"), "집중도 100%면 단일 계약 리스크"),
     ])
     metric_row([
-        ("계약 총액", fd.usd((m.get("backlog_musd") or 0) * 1e6), "계약 기간 전체 합산"),
+        ("계약 총액", fd.usd((m.get("backlog_musd") or 0) * 1e6), "계약 기간 전체 합산 · 명목"),
         ("옵션 포함 최대", fd.num(m.get("mw_contracted_option"), 0, " MW"), "확장옵션 전량 행사 가정"),
         ("MW·년당 단가", fd.usd(m.get("revenue_per_mw_year")), "계약 총액 ÷ MW ÷ 연수"),
-        ("계약 ÷ 누적 투입", fd.num(
+        # 이것은 회수율이 아니다. 15년치 **명목 매출**을 지금까지 쌓은 자산으로 나눈 값이라
+        # 앞으로 들어갈 공사비·운영비·세금·시간가치가 전부 빠져 있고, 분모는 계속 커진다.
+        ("계약총액 ÷ 누적 자산", fd.num(
             (m.get("backlog_musd") or 0) * 1e6 / m["ppe_gross"] if m.get("ppe_gross") else None, 2, "배"),
-         "쌓은 자산이 계약으로 회수되는 비율"),
+         "명목 매출 대비 배수 — 회수율이 아니다"),
     ])
+
+    # ── 서명 ≠ 발효 ───────────────────────────────────────────────────────────
+    # 커버리지 숫자를 그대로 믿으면 안 되는 이유를 숫자 바로 밑에 둔다. 선행조건이
+    # 깨지면 위 수치가 통째로 0으로 돌아간다.
+    pending = m.get("pending_close")
+    if pending is not None and not pending.empty:
+        due = m.get("closing_deadline")
+        left = int((pd.Timestamp(due) - pd.Timestamp.today().normalize()).days) if due is not None else None
+        names = " · ".join(str(x) for x in pending["customer"].tolist())
+        st.warning(
+            f"**서명은 됐지만 아직 발효되지 않았다 — {fd.num(m.get('mw_pending_close'), 0, ' MW')}"
+            f"({esc(names)}).** 종결 예정일 "
+            f"{pd.Timestamp(due).date() if due is not None else '미상'}"
+            + (f" · {pxy.dday(left)}" if left is not None else "")
+            + ". 이사회 승인과 임대인의 프로젝트금융 조달이 선행조건이고, 충족되지 않으면 "
+              "양측 모두 해지할 수 있다. 다만 종결일은 연장 가능하다고 명시돼 있어 "
+              "그날 발표가 없다고 곧 해지는 아니다. (10-Q 2026 Q2 Note 9)")
+        for row in pending.to_dict("records"):
+            if row.get("closing_note"):
+                st.caption(esc(str(row["closing_note"])))
 
     left, right = st.columns(2)
     with left:
@@ -356,8 +379,11 @@ with tabs[1]:
             "직접 연결된 기한이다."))
         for row in rules.to_dict("records"):
             days = int(row["남은 일수"])
-            icon = "🔴" if days < 30 else ("🟡" if days < 90 else "⚪")
-            st.markdown(f"{icon} **{row['deadline'].date()} · D-{days}** — {row['facility']}")
+            # 지난 기한은 목록에서 빼지 않는다(함정 ⑦). 대신 `D--3`이 나오지 않게
+            # proxy.dday()로 찍고, 지난 것은 회색으로 내린다.
+            icon = ("⚫" if days < 0 else
+                    "🔴" if days < 30 else ("🟡" if days < 90 else "⚪"))
+            st.markdown(f"{icon} **{row['deadline'].date()} · {pxy.dday(days)}** — {row['facility']}")
             st.caption(esc(f"조건: {row['condition']}  ·  미충족 시: {row['consequence']}"))
 
     st.divider()
@@ -489,7 +515,11 @@ with tabs[4]:
         "매출보다 먼저 대규모 인프라를 지은 상장사 13곳. 결과는 주가가 아니라 **객관적 재무 사건**으로 "
         "나눴다(주가로 나누면 순환논증이 된다). 그런 다음 항목별 값을 두 그룹에 대조했다.\n\n"
         "**처음 세웠던 7개 축 중 3개는 판별력이 없었다.** 런웨이는 유지 9.0개월 vs 붕괴 7.2개월로 "
-        "차이가 없었고(Cheniere는 2.8개월에서 생존), 이자 자본화는 프로젝트 규모의 반영일 뿐이었다."))
+        "차이가 없었고(Cheniere는 2.8개월에서 생존), 이자 자본화는 프로젝트 규모의 반영일 뿐이었다.\n\n"
+        "**'유지'는 회사가 살아남았다는 뜻이지 그때 주주가 돈을 지켰다는 뜻이 아니다.** "
+        "Talen과 Core Scientific은 Chapter 11을 거쳐 사업은 이어졌지만 그 과정에서 기존 보통주는 "
+        "사실상 소각됐다. 이 표는 **사업의 생존**을 가르는 항목을 찾은 것이고, 주주 수익은 "
+        "희석과 자본구조 재편이라는 별개의 관문을 하나 더 지나야 한다."))
     st.caption(fresh.tab_line("sector", m, price_frame))
     axes = sc.load_axis_validation()
     if not axes.empty:
@@ -1073,17 +1103,29 @@ with tabs[9]:
 
             if card["axis"].startswith("자금여력"):
                 metric_row([
-                    ("분기말 현금", fd.usd(m.get("cash_total")), f"출처: {m.get('cash_source', '–')}"),
-                    ("조달 반영 현금", fd.usd(m.get("cash_proforma")), "분기 후 전환사채 순유입 반영"),
+                    ("분기말 현금(제한 포함)", fd.usd(m.get("cash_total")),
+                     f"출처: {m.get('cash_source', '–')}"),
+                    ("그중 제한현금", fd.usd(m.get("cash_restricted")), "담보·에스크로로 묶여 소진에 못 쓴다"),
                     ("분기 영업소진", fd.usd(m.get("op_burn_q")), ""),
                     ("분기 설비투자", fd.usd(m.get("capex_q")), ""),
                 ])
                 metric_row([
+                    ("런웨이 분자", fd.usd(m.get("runway_cash")),
+                     f"{m.get('runway_basis', '총현금')} + 분기 후 조달 · **이후 소진은 빼지 않았다**"),
                     ("총소진 런웨이", fd.num(m.get("runway_total"), 1, "개월"), "영업소진 + capex 기준"),
                     ("운영만 런웨이", fd.num(m.get("runway_ops"), 1, "개월"), "capex 전면 중단 가정"),
                     ("분기 총소진", fd.usd(m.get("burn_q_total")), ""),
                     ("누적 설비투자", fd.usd(m.get("capex_cumulative")), ""),
                 ])
+                # 프로포마 현금은 조달만 더하고 그 뒤 소진은 빼지 않은 값이다. 분기말에서
+                # 멀어질수록 실제 잔액보다 커지므로, 얼마나 멀어졌는지를 같이 적는다.
+                gap = m.get("cash_proforma_days")
+                st.caption(esc(
+                    f"런웨이 분자는 {m.get('runway_basis', '총현금')}에 분기 후 조달을 더한 값이다. "
+                    f"기준일 이후 {gap}일이 지났고 그 사이 지출은 빠져 있지 않다 — "
+                    "다음 10-Q 전까지는 실제 잔액보다 크다고 보는 편이 맞다."
+                    if gap is not None else
+                    "런웨이 분자에는 기준일 이후 지출이 빠져 있다."))
                 burn = m["capex_series"][["label", "end", "val"]].rename(columns={"val": "설비투자"})
                 ops = m["op_cf_series"][["end", "val"]].copy()
                 ops["영업소진"] = ops["val"].abs()

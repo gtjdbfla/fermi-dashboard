@@ -1,5 +1,7 @@
 key,label,period_end,value,unit,source
-cash_total,현금 + 제한현금,2026-06-30,91700000,USD,2026 Q2 8-K
+cash_total,현금 + 제한현금,2026-06-30,91731000,USD,2026 Q2 10-Q
+cash_free,자유로운 현금,2026-06-30,62536000,USD,2026 Q2 10-Q
+cash_restricted,제한현금,2026-06-30,29195000,USD,2026 Q2 10-Q
 capex_quarter,분기 PP&E 투자,2026-06-30,185000000,USD,2026 Q2 8-K
 ppe_gross,PP&E 총액(누적),2026-06-30,1550000000,USD,2026 Q2 8-K
 debt_total,총차입금,2026-06-30,520100000,USD,2026 Q2 8-K
