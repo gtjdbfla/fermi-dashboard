@@ -307,7 +307,7 @@ def _summary_prompt(payload: str, facts: dict, state: str = "") -> str:
 ## 이미 알고 있는 배경 (절대 다시 쓰지 마라)
 - 서명된 계약 {facts['contracted']:,.0f} MW / 고객 {facts['customers']}곳 → 커버리지 {facts['coverage']:.0f}%
 - 반입 설비 {facts['landed']:,.0f} MW · 분기 매출 {facts['revenue']} · 분기 영업현금흐름 {facts['op_cf']}
-- 살아남은 동종 기업은 자본 투입 시점 커버리지가 74~92%였다
+- 살아남은 동종 기업 중 커버리지를 수치로 확인한 곳은 2곳(74%·89%)뿐이다
 - 2026-11-10까지 400MW 서명 약정, 2027-08-10 만기 $445M
 - **TensorWave 222MW는 서명됐을 뿐 아직 종결 전이다.** 이사회 승인·프로젝트금융 조달이
   선행조건이고 종결 예정일은 2026-09-30(연장 가능), 미충족 시 양측 해지 가능하다.

@@ -267,8 +267,13 @@ tabs = st.tabs(["① 계약 커버리지", "② 만기 정합", "③ 현금흐�
 # ── ① 계약 커버리지 ───────────────────────────────────────────────────────────
 with tabs[0]:
     heading("지을 용량을 사 줄 고객이 계약돼 있는가", size="####", help_text=(
-        "검증에서 가장 깨끗하게 갈린 지표다. 유지 그룹 6곳은 전부 장기 take-or-pay로 부채 만기를 "
-        "덮었고, 붕괴 4곳은 계약이 없거나(Tellurian) 만기가 어긋났다(New Fortress)."))
+        "검증에서 가장 깨끗하게 갈린 지표다. 붕괴 4곳은 계약이 없거나(Tellurian 0%) 만기가 "
+        "어긋났다(New Fortress).\n\n"
+        "**다만 유지 6곳이 전부 같은 모양은 아니다.** 커버리지를 수치로 확인한 곳은 "
+        "Cheniere 89%와 Core Scientific 74% 둘뿐이고, Venture Global은 상장 전 장기 SPA를 "
+        "확보했다. Bloom은 장비 판매 + 서비스 계약, Applied Digital은 소규모 단계별 리스, "
+        "Talen은 **회생 이후** 데이터센터 PPA로 전환한 경우다. 표본이 작다는 것을 "
+        "감안하고 봐야 한다."))
     st.caption(fresh.tab_line("contract", m, price_frame))
     metric_row([
         ("서명된 계약", fd.num(m.get("mw_contracted"), 0, " MW"), "선행조건 충족 여부와 무관한 서명 기준"),
@@ -311,7 +316,12 @@ with tabs[0]:
     left, right = st.columns(2)
     with left:
         heading("섹터 대비 커버리지 (%)", help_text=(
-            "유지 그룹의 관측 범위는 74~92%다. Tellurian은 0%에서 매각됐다."))
+            # 범위를 문장에 박지 마라. 예전에 74~92%로 적혀 있었는데 92%는 **진행중
+            # 그룹**의 NextDecade 값이라 유지 그룹 주장에 섞이면 안 되는 숫자였다.
+            (lambda b: f"유지 그룹에서 커버리지를 수치로 확인한 곳은 2곳뿐이고 범위는 "
+                       f"{b[0]:.0f}~{b[1]:.0f}%다. Tellurian은 0%에서 매각됐다."
+                       if b else "유지 그룹 커버리지 수치를 읽지 못했다."
+             )(sc.coverage_benchmark().get("유지"))))
         summary = sc.summary()
         bench = summary.dropna(subset=["coverage"])[["company", "group", "coverage"]].copy()
         coverage_now = (m.get("mw_contracted") or 0) / (m.get("mw_landed") or 1) * 100
