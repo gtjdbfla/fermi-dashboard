@@ -60,6 +60,13 @@ INSTANT_TAGS = {
 # 다른 회사와 시대가 달라진다. 2020년 이후로 잘라 같은 사이클 안에서 비교한다.
 PRICE_SINCE = "2020-01-01"
 
+# 상장폐지된 표본. 재무는 그대로 쓰고 시세 조회만 건너뛴다.
+# **야후는 없는 종목에 404를 주는데, 그게 매 실행 로그에 error로 쌓여 진짜 고장을 가린다.**
+# 실제로 TELL 실패 2줄이 50회 쌓이는 동안 아무도 읽지 않았다. 근거는 SEC 공시라 바뀌지 않는다.
+DELISTED = {
+    "TELL": ("2024-10-09", "Woodside 인수 — 25-NSE 2024-10-09, 15-12G 2024-11-08"),
+}
+
 
 def _facts(cik: int) -> dict:
     url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
@@ -113,21 +120,34 @@ def _annual_instant(facts: dict, tags: list[str], unit: str = "USD") -> dict:
     return merged
 
 
-def _price_outcome(ticker: str) -> dict | None:
+def _monthly_closes(ticker: str) -> pd.DataFrame | None:
+    """월봉 종가. 아래 두 계산이 같은 응답을 쓰므로 한 번만 받는다.
+
+    **404는 고장이 아니다.** 야후는 상장폐지 종목에 404 + "symbol may be delisted"를
+    준다. 예외로 뭉뚱그리면 매 실행마다 error 두 줄이 쌓여, 나중에 진짜 실패가
+    묻힌다. 둘을 갈라서 찍는다.
+    """
     try:
         response = requests.get(
             f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
             params={"range": "max", "interval": "1mo"}, headers=YAHOO_HEADERS, timeout=30,
         )
+        if response.status_code == 404:
+            print(f"    [skip] {ticker} 시세 없음 — 야후가 상장폐지로 본다")
+            return None
         result = response.json()["chart"]["result"][0]
         frame = pd.DataFrame({
             "date": pd.to_datetime(result["timestamp"], unit="s"),
             "close": result["indicators"]["quote"][0]["close"],
         }).dropna()
     except Exception as error:
-        print(f"    시세 실패 {ticker}: {error}")
+        print(f"    [fail] {ticker} 시세 실패: {type(error).__name__}: {error}")
         return None
-    frame = frame[frame["date"] >= PRICE_SINCE]
+    return frame if not frame.empty else None
+
+
+def _price_outcome(ticker: str, closes: pd.DataFrame) -> dict | None:
+    frame = closes[closes["date"] >= PRICE_SINCE]
     if frame.empty:
         return None
     peak = frame.loc[frame["close"].idxmax()]
@@ -149,27 +169,13 @@ def _price_outcome(ticker: str) -> dict | None:
     }
 
 
-def _yearly_prices(ticker: str) -> list[dict]:
+def _yearly_prices(ticker: str, closes: pd.DataFrame) -> list[dict]:
     """연도별 마지막 종가. '각 기업이 지금의 페르미와 같은 위치였던 해'의 주가를 찾는 데 쓴다.
 
     분할 조정된 값이라 수익률 계산에 그대로 쓸 수 있다(FuelCell처럼 액면병합을 반복한 종목도
     같은 기준으로 비교된다).
     """
-    try:
-        response = requests.get(
-            f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
-            params={"range": "max", "interval": "1mo"}, headers=YAHOO_HEADERS, timeout=30,
-        )
-        result = response.json()["chart"]["result"][0]
-        frame = pd.DataFrame({
-            "date": pd.to_datetime(result["timestamp"], unit="s"),
-            "close": result["indicators"]["quote"][0]["close"],
-        }).dropna()
-    except Exception as error:
-        print(f"    연도별 시세 실패 {ticker}: {error}")
-        return []
-    if frame.empty:
-        return []
+    frame = closes.copy()
     frame["year"] = frame["date"].dt.year
     last = frame.sort_values("date").groupby("year").last().reset_index()
     return [
@@ -192,10 +198,17 @@ def collect() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
                 "ticker": ticker, "company": name, "sub": sub, "fy": year,
                 **{key: values.get(year) for key, values in columns.items()},
             })
-        outcome = _price_outcome(ticker)
+        if ticker in DELISTED:
+            when, why = DELISTED[ticker]
+            print(f"    [skip] 시세 조회 생략 — {when} 상장폐지({why})")
+            continue
+        closes = _monthly_closes(ticker)
+        if closes is None:
+            continue
+        outcome = _price_outcome(ticker, closes)
         if outcome:
             price_records.append({**outcome, "company": name})
-        history_records.extend(_yearly_prices(ticker))
+        history_records.extend(_yearly_prices(ticker, closes))
     return (pd.DataFrame(annual_records), pd.DataFrame(price_records),
             pd.DataFrame(history_records))
 
