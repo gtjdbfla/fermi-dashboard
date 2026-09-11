@@ -22,6 +22,9 @@ import pandas as pd
 import diskcache as dc
 
 CACHE = "proxy_findings"
+HEALTH = "위임장 대결 스캔"
+# 크론 주기(30분)보다 짧게 잡는다 — 크론은 매 회차 기록되고, 화면 리런은 묶인다.
+HEALTH_EVERY = 1200
 MAX_AGE = 86400 * 3650        # 제출된 공시는 변하지 않는다
 MAX_SCAN = 40                 # 한 번에 새로 읽을 공시 수
 MAX_CHARS = 200_000
@@ -132,6 +135,22 @@ def author(form) -> str:
     return "미상"        # PREC14A·DEFC14A는 양측 다 낼 수 있다
 
 
+def _health_due() -> bool:
+    """건수 기록을 지금 남길 때인가.
+
+    `findings()`는 화면을 그릴 때마다 불리는데 `diskcache.save_json`은 원자적이지 않다
+    (임시파일 없이 그대로 덮는다). 매 리런마다 쓰면 크론과 겹쳐 파일이 깨질 수 있어,
+    크론 주기보다 짧은 간격으로만 묶어 쓴다.
+    """
+    at = (dc.health().get(HEALTH) or {}).get("at")
+    if not at:
+        return True
+    try:
+        return (pd.Timestamp.now(tz="UTC") - pd.Timestamp(at)).total_seconds() >= HEALTH_EVERY
+    except Exception:
+        return True
+
+
 def findings(filings: pd.DataFrame | None = None, read_text=None,
              limit: int = MAX_SCAN) -> dict:
     """접수번호 → {filed, form, signals}. 새 공시만 읽고 나머지는 캐시에서."""
@@ -166,7 +185,11 @@ def findings(filings: pd.DataFrame | None = None, read_text=None,
         changed = True
     if changed:
         dc.save_json(CACHE, stored)
-        dc.record_health("위임장 대결 스캔", len(stored))
+    # **변화가 없어도 '확인했다'를 남긴다.** 전에는 changed일 때만 기록해서, 새 서식이
+    # 없는 조용한 날과 스캔이 죽은 날이 화면에서 똑같아 보였다 — 09-06자 기록이 닷새째
+    # 그대로였는데 어느 쪽인지 가릴 방법이 없었다. 함정 ⑩과 같은 성질이다.
+    if changed or _health_due():
+        dc.record_health(HEALTH, len(stored))
     return stored
 
 
