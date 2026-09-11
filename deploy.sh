@@ -1,7 +1,7 @@
 #!/bin/sh
 # 원격 변경을 받아와 필요한 만큼만 반영한다. 크론으로 30분마다 돈다.
 #
-#   */30 * * * * /home/yulimseo/fermi-dashboard/deploy.sh >> /home/yulimseo/fermi-dashboard/logs/deploy.log 2>&1
+#   5,35 * * * * /home/yulimseo/fermi-dashboard/deploy.sh >> /home/yulimseo/fermi-dashboard/logs/deploy.log 2>&1
 #
 # data/의 CSV만 바뀐 경우에는 아무것도 하지 않는다. data/는 컨테이너에 볼륨으로 물려 있고
 # Streamlit 캐시 TTL이 10분이라 저절로 반영된다. 매번 재빌드하면 그동안 화면이 끊긴다.
@@ -9,6 +9,17 @@
 
 set -e
 cd "$(dirname "$0")"
+
+# **조용한 로그는 멈춘 로그와 구분되지 않는다.** 변경이 없으면 아무것도 안 찍어서
+# deploy.log가 0바이트였고, 크론이 살아 있는지 보려고 /var/log/syslog를 뒤져야 했다.
+# 이제 회차마다 한 줄 남긴다 — 대신 무한히 자라지 않게 여기서 먼저 자른다.
+# **`mv`로 갈면 안 된다.** 크론이 `>>`로 이 파일을 이미 열고 있어서, inode를 바꾸면
+# 이번 실행의 나머지 출력이 지워진 파일로 들어간다. 같은 inode를 덮어써야 한다.
+LOG=logs/deploy.log
+if [ -f "$LOG" ] && [ "$(wc -l < "$LOG")" -gt 4000 ]; then
+    tail -n 2000 "$LOG" > "$LOG.keep" && cat "$LOG.keep" > "$LOG"
+    rm -f "$LOG.keep"
+fi
 
 # 실패하면 로그에만 남는데 **그 로그를 읽는 사람이 없다.** 갱신이 멈춘 걸 몇 주 뒤
 # 화면을 보고서야 알게 된다. 알림과 같은 통로로 보낸다.
@@ -45,7 +56,10 @@ STATE=.deployed
 DEPLOYED=$(cat "$STATE" 2>/dev/null || echo "")
 [ -z "$DEPLOYED" ] && DEPLOYED="$BEFORE"
 
-[ "$DEPLOYED" = "$AFTER" ] && exit 0
+if [ "$DEPLOYED" = "$AFTER" ]; then
+    echo "$(date '+%F %T') [ok] 변경 없음 ($(echo "$AFTER" | cut -c1-7))"
+    exit 0
+fi
 
 CHANGED=$(git diff --name-only "$DEPLOYED" "$AFTER")
 echo "$(date '+%F %T') [pull] $BEFORE -> $AFTER"
