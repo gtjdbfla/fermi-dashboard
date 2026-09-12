@@ -21,6 +21,7 @@ import pandas as pd
 import streamlit as st
 
 import sec_edgar as sec
+import assessment as assess
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -301,9 +302,10 @@ def compute(facts: dict, price_meta: dict) -> dict:
     # 분기 말 이후 조달분까지 반영한 프로포마 현금. 런웨이는 이 값으로 봐야 현실에 맞는다.
     # **다만 조달만 더하고 그 뒤 소진은 빼지 않은 값이다.** 분기말로부터 시간이 흐를수록
     # 실제 잔액보다 커진다. 화면·리포트에서 '이후 소진 차감 전'이라고 밝혀야 한다.
-    post_q = manual.get("post_q_financing_net", 0.0) + manual.get("post_q_capped_call_cost", 0.0)
+    points = manual_points()
+    post_q = assess.cash_adjustment(points, metrics["cash_asof"])
     metrics["post_q_net"] = post_q
-    metrics["cash_proforma"] = (metrics["cash_total"] or 0.0) + post_q
+    metrics["cash_proforma"] = metrics["cash_total"] + post_q if metrics["cash_total"] is not None else None
     metrics["cash_proforma_days"] = (
         int((pd.Timestamp.today().normalize() - pd.Timestamp(metrics["cash_asof"])).days)
         if metrics["cash_asof"] is not None else None)
@@ -312,24 +314,13 @@ def compute(facts: dict, price_meta: dict) -> dict:
     # 총액에는 담보·에스크로로 묶인 돈이 섞여 있다. 런웨이 분모는 자유현금이어야 한다.
     # 다만 자유·제한 구분은 수동 입력이라 XBRL이 다음 분기로 넘어가면 낡는다(함정 ⑩).
     # 기준일이 현금 시계열의 끝과 같을 때만 쓰고, 어긋나면 구분 없음으로 되돌린다.
-    points = manual_points()
-    split_asof = points.get("cash_restricted", (None, None))[1]
-    aligned = (split_asof is not None and metrics["cash_asof"] is not None
-               and pd.Timestamp(split_asof) == pd.Timestamp(metrics["cash_asof"]))
-    metrics["cash_restricted"] = points["cash_restricted"][0] if aligned else None
-    if aligned and "cash_free" in points:
-        metrics["cash_free"] = points["cash_free"][0]
-    elif aligned and metrics["cash_total"] is not None:
-        metrics["cash_free"] = metrics["cash_total"] - metrics["cash_restricted"]
-    else:
-        metrics["cash_free"] = None
+    metrics["cash_free"], metrics["cash_restricted"] = assess.cash_split(
+        points, metrics["cash_asof"], metrics["cash_total"])
     metrics["cash_free_proforma"] = (
         metrics["cash_free"] + post_q if metrics["cash_free"] is not None else None)
     # 자유현금을 못 가리면 총액으로 물러서되, 어느 쪽으로 쟀는지 남긴다.
-    metrics["runway_cash"] = (metrics["cash_free_proforma"]
-                              if metrics["cash_free_proforma"] is not None
-                              else metrics["cash_proforma"])
-    metrics["runway_basis"] = "자유현금" if metrics["cash_free_proforma"] is not None else "총현금"
+    metrics["runway_cash"] = metrics["cash_free_proforma"]
+    metrics["runway_basis"] = "자유현금" if metrics["cash_free_proforma"] is not None else "자유현금 미확인"
 
     op_cf = quarterly(facts, TAG_OP_CF)
     metrics["op_cf_series"] = op_cf
@@ -338,7 +329,7 @@ def compute(facts: dict, price_meta: dict) -> dict:
     # 부호가 필요하다. 예전에는 abs()만 담아서 영업CF가 흑자로 돌아도 로드맵 5단계가
     # 영원히 '대기'로 남았다.
     metrics["op_cf_q"] = op_latest
-    metrics["op_burn_q"] = abs(op_latest) if op_latest is not None else None
+    metrics["op_burn_q"] = max(-op_latest, 0) if op_latest is not None else None
 
     revenue = quarterly(facts, TAG_REVENUE)
     if revenue.empty:
@@ -353,8 +344,9 @@ def compute(facts: dict, price_meta: dict) -> dict:
     # 누적에는 합산 구간까지 모두 더해야 한다. 분기 구간만 세면 2025년 Q2~Q3가 통째로 빠진다.
     metrics["capex_cumulative"] = float(capex_full["val"].sum()) if not capex_full.empty else None
 
-    total_burn = (metrics["op_burn_q"] or 0.0) + (metrics["capex_q"] or 0.0)
-    metrics["burn_q_total"] = total_burn or None
+    total_burn = (max(metrics["capex_q"] - op_latest, 0)
+                  if metrics["capex_q"] is not None and op_latest is not None else None)
+    metrics["burn_q_total"] = total_burn
     metrics["runway_ops"] = _safe_div(metrics["runway_cash"], metrics["op_burn_q"])
     metrics["runway_ops"] = metrics["runway_ops"] * 3 if metrics["runway_ops"] else None
     metrics["runway_total"] = _safe_div(metrics["runway_cash"], metrics["burn_q_total"])
@@ -395,7 +387,12 @@ def compute(facts: dict, price_meta: dict) -> dict:
 
     contracts = load_csv("contracts.csv")
     metrics["contracts"] = contracts
-    binding = contracts[contracts["binding"] == "Y"] if not contracts.empty else contracts
+    # 첫 계약 체결 이전 시점의 PP&E. '① 투입이 계약에 선행했다'는 이력이라, PP&E가 매 분기
+    # 커져도 이 값은 고정돼야 한다 — 안 그러면 미래 투자까지 '첫 계약 전 투입'으로 읽힌다.
+    first_signed = (pd.to_datetime(contracts["signed"], errors="coerce").min()
+                    if not contracts.empty else None)
+    metrics["ppe_before_first_contract"] = assess.value_before(metrics["ppe_series"], first_signed)
+    binding = assess.active_contracts(contracts)
     metrics["mw_contracted"] = float(binding["phase1_mw"].sum()) if not binding.empty else 0.0
     metrics["mw_contracted_option"] = float(binding["option_mw"].sum()) if not binding.empty else 0.0
     metrics["backlog_musd"] = float(binding["total_revenue_musd"].sum()) if not binding.empty else 0.0
@@ -405,9 +402,9 @@ def compute(facts: dict, price_meta: dict) -> dict:
     metrics["capex_per_landed_mw"] = _safe_div(metrics["ppe_gross"], metrics["mw_landed"])
     # 계약 단가: 총 계약금액 / 계약 MW / 계약기간. 전력인프라 리스의 실질 단가다.
     if not binding.empty:
-        years = float(binding.iloc[0]["term_years"])
+        mw_years = (binding["phase1_mw"] * binding["term_years"]).sum(min_count=len(binding))
         metrics["revenue_per_mw_year"] = _safe_div(
-            metrics["backlog_musd"] * 1e6, metrics["mw_contracted"] * years
+            metrics["backlog_musd"] * 1e6, mw_years
         )
     else:
         metrics["revenue_per_mw_year"] = None
@@ -416,17 +413,16 @@ def compute(facts: dict, price_meta: dict) -> dict:
     # 임대인의 프로젝트금융 조달이라는 선행조건에 걸려 있고, 충족되지 않으면 양측 모두
     # 해지할 수 있다(10-Q 2026 Q2 Note 9). `binding`은 서명 여부라 그대로 두고 — 약정
     # 문턱(MUFG 400MW)은 '서명'을 묻기 때문이다 — 종결 여부는 따로 센다.
-    pending = (binding[binding.get("closing_status").astype(str).str.strip() == "미종결"]
-               if not binding.empty and "closing_status" in binding.columns
-               else binding.iloc[0:0])
+    pending = binding[binding["closing_status"].ne("종결")]
     metrics["mw_pending_close"] = float(pending["phase1_mw"].sum()) if not pending.empty else 0.0
     metrics["pending_close_count"] = int(len(pending))
     metrics["pending_close"] = pending
-    deadlines = (pd.to_datetime(pending["closing_deadline"], errors="coerce").dropna()
+    deadlines = (pd.to_datetime(pending.get("closing_deadline", pd.Series(dtype=str)), errors="coerce").dropna()
                  if not pending.empty else pd.Series(dtype="datetime64[ns]"))
     metrics["closing_deadline"] = deadlines.min() if not deadlines.empty else None
     # 종결된 계약만으로 다시 잰 커버리지. 서명 기준 수치와 나란히 놓아야 차이가 보인다.
-    metrics["mw_closed"] = metrics["mw_contracted"] - metrics["mw_pending_close"]
+    closed = binding[binding["closing_status"].eq("종결")]
+    metrics["mw_closed"] = float(closed["phase1_mw"].sum()) if not closed.empty else 0.0
     metrics["closed_vs_landed"] = _safe_div(metrics["mw_closed"], metrics["mw_landed"])
 
     milestones = load_csv("milestones.csv")
@@ -473,17 +469,15 @@ def compute(facts: dict, price_meta: dict) -> dict:
     debt = quarter_ends_only(debt_series(facts))
     debt_full = append_manual(with_labels(debt), metrics["manual_asof"], manual.get("debt_total"))
     metrics["debt_series"] = debt_full
-    _, metrics["debt_total"], metrics["debt_source"] = latest_point(debt_full)
+    metrics["debt_asof"], metrics["debt_total"], metrics["debt_source"] = latest_point(debt_full)
 
     events = load_csv("capital_events.csv")
     metrics["capital_events"] = events
     # 분기 후 발행한 전환사채는 아직 재무제표에 없다. 프로포마 부채에는 더해야 한다.
-    post_q_notes = 0.0
-    if not events.empty:
-        post = events[events["period"] == "2026 Q3"]
-        post_q_notes = float(post["gross_musd"].sum()) * 1e6 if not post.empty else 0.0
-    metrics["debt_proforma"] = (metrics["debt_total"] or 0.0) + post_q_notes
-    metrics["net_debt_proforma"] = metrics["debt_proforma"] - metrics["cash_proforma"]
+    post_q_notes = assess.debt_adjustment(events, metrics["debt_asof"])
+    metrics["debt_proforma"] = metrics["debt_total"] + post_q_notes if metrics["debt_total"] is not None else None
+    metrics["net_debt_proforma"] = (metrics["debt_proforma"] - metrics["cash_free_proforma"]
+        if metrics["debt_proforma"] is not None and metrics["cash_free_proforma"] is not None else None)
 
     equity = sec.instant_series(facts, TAG_EQUITY)
     metrics["equity_series"] = equity
