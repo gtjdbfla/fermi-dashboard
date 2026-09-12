@@ -95,7 +95,14 @@ def covenants() -> pd.DataFrame:
 
 
 def verdict(m: dict) -> dict:
-    """핵심 판정 ②. 만기 연도가 아니라 **그때까지 들어올 리스 수입 대비 상환액**으로 본다."""
+    """핵심 판정 ②. 만기 연도가 아니라 **그때까지 들어올 리스 수입 대비 상환액**으로 본다.
+
+    **계약이 발효되고 리스 수입이 기간에 고르게 들어온다고 가정한 단순 비교다.**
+    발효 조건(선행조건 미충족 시 해지 가능) · 비용 · 중도상환 · 다른 부채는 넣지 않았다.
+    그래서 이 비율에는 '충족'이 없다 — 100%를 넘어도 상환 능력을 입증한 게 아니라
+    '이 단순 비교로는 문제가 안 보인다'는 뜻일 뿐이다. 아래에서도 좋은 결과는 없다,
+    '미달' 아니면 '확인 불가'다.
+    """
     frame = schedule()
     leases = frame[frame["구분"] == "리스 유입"].dropna(subset=["종료"])
     debts = frame[(frame["구분"] == "부채 만기") & (frame["금액(백만$)"] > 0)]
@@ -122,7 +129,9 @@ def verdict(m: dict) -> dict:
     elif cover is not None and cover < 1:
         status, text = "warning", "주의 — 만기까지 들어올 리스 수입이 상환액에 못 미친다"
     else:
-        status, text = "good", "충족 — 리스 수입이 만기 전에 상환액을 덮는다"
+        status, text = "warning", ("확인 불가 — 단순 비교로는 리스 수입이 상환액을 넘지만, "
+                                    "발효 조건·비용·다른 부채를 뺀 계산이라 상환 능력을 "
+                                    "입증하지 못한다")
 
     unknown = int(debts["종료"].isna().sum())
     detail = (
@@ -136,6 +145,10 @@ def verdict(m: dict) -> dict:
         "만기 연도만 비교하면 '리스 2042년 vs 만기 2031년'처럼 보여 여유가 있는 것 같지만, "
         "실제로 먼저 오는 것은 그보다 4년 이른 만기다."
     )
+    if status == "warning" and cover is not None and cover >= 1:
+        detail += ("\n\n**비율이 100%를 넘어도 '충족'은 아니다.** 계약이 발효된다고 가정하고 "
+                   "리스 수입을 기간에 고르게 나눈 값이라, 발효 조건·운영비·세금·다른 부채를 "
+                   "빼면 실제 여력은 이보다 작다.")
     if unknown:
         detail += f"\n\n⚠️ 만기를 확인하지 못한 차입이 {unknown}건 남아 있다."
 
