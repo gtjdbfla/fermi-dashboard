@@ -825,8 +825,8 @@ def compose(m, verdicts, state, filings, articles, actions, price_frame, mark,
 
 
 def main() -> int:
-    if not alerts.configured():
-        print("[skip] TELEGRAM_BOT_TOKEN/CHAT_ID 없음")
+    if not alerts.enabled():
+        print("[skip] 텔레그램 알림 비활성 (미설정 또는 FERMI_ALERTS_DISABLED)")
         return 0
 
     import analyst as an

@@ -109,8 +109,8 @@ def notify(m, articles) -> None:
     if m is None:
         print("[skip] 확정 수치 없음 — 알림 건너뜀")
         return
-    if not alerts.configured():
-        print("[skip] TELEGRAM_BOT_TOKEN/CHAT_ID 없음 — 알림 꺼짐")
+    if not alerts.enabled():
+        print("[skip] 텔레그램 알림 비활성 — 미설정 또는 FERMI_ALERTS_DISABLED")
         return
     try:
         import filing_review as fr

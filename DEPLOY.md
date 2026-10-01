@@ -85,15 +85,21 @@ crontab -e
 
 로그는 `logs/news.log`에 UTC·KST 시각과 함께 쌓인다(`runlog.py`).
 
-## 외부 공개 (Tailscale Funnel)
+## 외부 공개 (Tailscale Funnel) — 2026-09-27부로 껐음
 
-기존 스택이 443을 쓰므로 페르미는 8443에 붙인다. Funnel이 쓸 수 있는 포트는 443/8443/10000뿐이다.
+**8443 슬롯은 이제 cheongyak-dashboard(8085 프로필 웹앱, basic_auth 게이트 경유)가 쓴다.**
+계정에 Funnel 슬롯이 443/8443/10000 셋뿐이라 페르미 쪽을 내리고 옮겼다(가족·친구 테스트용
+요청). 페르미는 지금 **LAN 전용**(`http://192.168.75.145:8081`)이고 인터넷에서는 안 열린다.
+되돌리려면 먼저 `tailscale funnel --https=8443 off`로 cheongyak 쪽을 내려야 한다(동시에 둘 다
+못 쓴다) — cheongyak-dashboard/CONTEXT.md 또는 homeserver-deploy 메모리에서 그쪽 상태 확인.
 
+과거 명령(참고용, 지금은 안 쓰는 중):
 ```bash
-sudo tailscale funnel --bg --https=8443 http://127.0.0.1:8081
+tailscale funnel --bg --https=8443 http://127.0.0.1:8081
 ```
 
-주소는 `https://<머신이름>.<테일넷>.ts.net:8443`. 되돌리려면 `sudo tailscale funnel --https=8443 off`.
+주소는 `https://<머신이름>.<테일넷>.ts.net:8443`. 되돌리려면 `tailscale funnel --https=8443 off`
+(이 서버는 sudo 없이 일반 유저 권한으로 tailscale funnel 명령이 통과된다 — `-bg` 재실행 때 헷갈리지 말 것).
 
 **인증이 없다.** 비밀번호를 걸려면 `Caddyfile`의 `reverse_proxy` 위에 아래를 추가하고 `.env`에
 `DASHBOARD_USER` / `DASHBOARD_PASSWORD_HASH`를 넣는다.

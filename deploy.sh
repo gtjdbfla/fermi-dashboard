@@ -26,6 +26,10 @@ fi
 # `.` 로 읽지 않고 값만 뽑는다 — .env를 실행하면 안 된다.
 notify() {
     [ -f .env ] || return 0
+    # cheongyak-dashboard의 watcher가 이 .env를 --env-file로 그대로 공유해 쓰므로
+    # 토큰 자체는 안 건드린다 — Fermi 쪽만 끄는 전용 스위치.
+    _d=$(grep -m1 '^FERMI_ALERTS_DISABLED=' .env | cut -d= -f2-)
+    [ -n "$_d" ] && return 0
     _t=$(grep -m1 '^TELEGRAM_BOT_TOKEN=' .env | cut -d= -f2-)
     _c=$(grep -m1 '^TELEGRAM_CHAT_ID=' .env | cut -d= -f2-)
     [ -n "$_t" ] && [ -n "$_c" ] || return 0

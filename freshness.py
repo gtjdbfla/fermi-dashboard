@@ -147,6 +147,9 @@ def rows(m: dict, price_frame: pd.DataFrame) -> pd.DataFrame:
     if not state["configured"]:
         records.append({"구분": "30분", "데이터": "알림(텔레그램)", "최신 시점": "–",
                         "경과": "꺼짐", "갱신 주기": "크론 30분", "상태": "· 미설정"})
+    elif not state["enabled"]:
+        records.append({"구분": "30분", "데이터": "알림(텔레그램)", "최신 시점": "–",
+                        "경과": "꺼짐", "갱신 주기": "크론 30분", "상태": "· FERMI_ALERTS_DISABLED"})
     else:
         last = state.get("last_sent")
         records.append({

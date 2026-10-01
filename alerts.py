@@ -203,6 +203,22 @@ def configured() -> bool:
     return bool(os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"))
 
 
+def _disabled() -> bool:
+    """`FERMI_ALERTS_DISABLED`가 서 있으면 토큰이 있어도 안 보낸다.
+
+    cheongyak-dashboard의 watcher가 이 저장소의 `.env`를 그대로 공유해 쓴다
+    (`docker run --env-file fermi-dashboard/.env`). 토큰 자체를 지우면 Fermi만
+    끄려다 cheongyak 알림까지 같이 죽는다(실제로 그랬다) — 그래서 Fermi 전용
+    스위치를 따로 둔다. `configured()`는 "토큰이 있는가"를 그대로 답한다.
+    """
+    return bool(os.environ.get("FERMI_ALERTS_DISABLED"))
+
+
+def enabled() -> bool:
+    """실제로 보내도 되는가 — 토큰 설정 여부와 Fermi 전용 끄기 스위치를 모두 본다."""
+    return configured() and not _disabled()
+
+
 SEND_TRIES = 3
 
 
@@ -228,6 +244,8 @@ def send(text: str) -> tuple[bool, str]:
     같은 순간에도 정상이라, 다시 시도하면 대개 붙는다. 근본 해결은 컨테이너에서
     IPv6를 끄는 것이고 그건 인프라 쪽 결정이라 여기서는 재시도로 버틴다.
     """
+    if _disabled():
+        return False, "FERMI_ALERTS_DISABLED로 꺼짐"
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not (token and chat_id):
@@ -1607,6 +1625,7 @@ def status() -> dict:
     store = _seen()
     return {
         "configured": configured(),
+        "enabled": enabled(),
         "initialized": bool(store.get("initialized")),
         "watching": len(store.get("ids") or {}),
         "last_check": store.get("last_check"),
